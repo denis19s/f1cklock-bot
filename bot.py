@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 
 from google import genai
 
@@ -18,6 +19,7 @@ from telegram.ext import (
     filters,
 )
 
+
 # =========================
 # НАСТРОЙКИ
 # =========================
@@ -35,7 +37,6 @@ AI_MODEL = "gemini-3.7-flash"
 
 ai = genai.Client(api_key=GEMINI_API_KEY)
 
-# Расписание хранится в памяти процесса.
 schedule = []
 
 
@@ -216,10 +217,6 @@ async def show_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# =========================
-# ДОБАВЛЕНИЕ СТРИМА
-# =========================
-
 async def handle_schedule_game(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -270,7 +267,6 @@ async def handle_schedule_time(
         reply_markup=SCHEDULE_MENU,
     )
 
-    # Автоматический анонс в канал
     try:
         await context.bot.send_message(
             chat_id=CHANNEL,
@@ -305,6 +301,30 @@ async def ai_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+def generate_with_gemini(prompt: str):
+    """
+    Синхронный запрос к Gemini.
+    Он запускается в отдельном потоке,
+    поэтому Telegram-бот не блокируется.
+    """
+
+    return ai.interactions.create(
+        model=AI_MODEL,
+        input=(
+            "Ты SMM-помощник Telegram-канала F1cklock.\n"
+            "Пиши короткие, живые, энергичные посты "
+            "для игрового канала и стримов.\n"
+            "Не используй длинные вступления.\n"
+            "Используй эмодзи умеренно.\n"
+            "Не добавляй пояснения от себя.\n\n"
+            f"Задача пользователя:\n{prompt}"
+        ),
+        generation_config={
+            "thinking_level": "low"
+        },
+    )
+
+
 async def generate_ai(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -313,25 +333,21 @@ async def generate_ai(
 
     await update.message.reply_text(
         "🤖 Генерирую...\n\n"
-        "Обычно это занимает несколько секунд.",
+        "Если Gemini не ответит в течение 30 секунд, "
+        "бот сообщит об ошибке.",
         reply_markup=CANCEL,
     )
 
     try:
-        response = await ai.aio.models.generate_content(
-            model=AI_MODEL,
-            contents=(
-                "Ты SMM-помощник Telegram-канала F1cklock.\n"
-                "Пиши короткие, живые, энергичные посты "
-                "для игрового канала и стримов.\n"
-                "Не используй длинные вступления.\n"
-                "Используй эмодзи умеренно.\n"
-                "Не добавляй пояснения от себя.\n\n"
-                f"Задача пользователя:\n{prompt}"
+        interaction = await asyncio.wait_for(
+            asyncio.to_thread(
+                generate_with_gemini,
+                prompt,
             ),
+            timeout=30,
         )
 
-        text = (response.text or "").strip()
+        text = (interaction.output_text or "").strip()
 
         if not text:
             raise RuntimeError("Gemini вернул пустой ответ")
@@ -365,16 +381,27 @@ async def generate_ai(
             reply_markup=keyboard,
         )
 
-    except Exception:
-        logging.exception("Gemini error")
+    except asyncio.TimeoutError:
+        logging.error("Gemini timeout after 30 seconds")
+
+        context.user_data.clear()
 
         await update.message.reply_text(
-            "❌ Gemini не ответил.\n\n"
-            "Проверь настройки GEMINI_API_KEY в Render.",
+            "⏱ Gemini не ответил за 30 секунд.\n\n"
+            "Попробуй ещё раз.",
             reply_markup=MENU,
         )
 
+    except Exception:
+        logging.exception("Gemini error")
+
         context.user_data.clear()
+
+        await update.message.reply_text(
+            "❌ Ошибка Gemini.\n\n"
+            "Попробуй ещё раз.",
+            reply_markup=MENU,
+        )
 
 
 # =========================
@@ -454,20 +481,21 @@ async def ai_buttons(
         )
 
         try:
-            response = await ai.aio.models.generate_content(
-                model=AI_MODEL,
-                contents=(
-                    "Ты SMM-помощник Telegram-канала F1cklock.\n"
-                    "Создай НОВЫЙ вариант поста.\n"
-                    "Он должен отличаться от предыдущего.\n"
-                    "Пиши коротко, живо и энергично.\n"
-                    "Используй эмодзи умеренно.\n"
-                    "Не добавляй пояснения.\n\n"
-                    f"Задача пользователя:\n{old_prompt}"
-                ),
+            retry_prompt = (
+                "Создай НОВЫЙ вариант.\n"
+                "Он должен отличаться от предыдущего.\n\n"
+                f"Задача пользователя:\n{old_prompt}"
             )
 
-            text = (response.text or "").strip()
+            interaction = await asyncio.wait_for(
+                asyncio.to_thread(
+                    generate_with_gemini,
+                    retry_prompt,
+                ),
+                timeout=30,
+            )
+
+            text = (interaction.output_text or "").strip()
 
             if not text:
                 raise RuntimeError("Gemini вернул пустой ответ")
@@ -500,6 +528,14 @@ async def ai_buttons(
                 reply_markup=keyboard,
             )
 
+        except asyncio.TimeoutError:
+            context.user_data.clear()
+
+            await query.message.reply_text(
+                "⏱ Gemini не ответил за 30 секунд.",
+                reply_markup=MENU,
+            )
+
         except Exception:
             logging.exception("Gemini retry error")
 
@@ -518,9 +554,7 @@ async def ai_buttons(
 async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "⚙️ Настройки\n\n"
-        "Пока доступны настройки по умолчанию.\n\n"
-        "В следующих версиях сюда можно добавить "
-        "Twitch, YouTube, Telegram и стиль публикаций.",
+        "Пока доступны настройки по умолчанию.",
         reply_markup=MENU,
     )
 
@@ -575,6 +609,7 @@ async def handle_message(
     text = message.text
 
     # Главное меню
+
     if text == "🎮 Создать пост":
         await create_post(update, context)
         return
@@ -624,20 +659,17 @@ async def handle_message(
         )
         return
 
-    # -------------------------
     # ИИ
-    # -------------------------
 
     if context.user_data.get("mode") == "ai":
         if message.text:
             await generate_ai(update, context)
         return
 
-    # -------------------------
     # Расписание
-    # -------------------------
 
     if context.user_data.get("mode") == "add_stream":
+
         step = context.user_data.get("step")
 
         if step == "game":
@@ -659,14 +691,13 @@ async def handle_message(
             await handle_schedule_time(update, context)
             return
 
-    # -------------------------
     # Игровые режимы
-    # -------------------------
 
     mode = context.user_data.get("mode")
     step = context.user_data.get("step")
 
     if step == "game":
+
         if not message.text:
             await update.message.reply_text(
                 "🎮 Напиши название игры текстом.",
@@ -683,9 +714,7 @@ async def handle_message(
         )
         return
 
-    # -------------------------
     # Контент
-    # -------------------------
 
     if mode in ["post", "clip", "announce", "live"]:
         await publish_media(update, context)
@@ -697,6 +726,7 @@ async def handle_message(
 # =========================
 
 def main():
+
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(message)s",
         level=logging.INFO,
