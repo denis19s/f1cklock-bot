@@ -1,9 +1,7 @@
 import os
 import logging
 import asyncio
-
-from google import genai
-from google.genai import types
+import httpx
 
 from telegram import (
     Update,
@@ -20,11 +18,6 @@ from telegram.ext import (
     filters,
 )
 
-
-# =========================
-# НАСТРОЙКИ
-# =========================
-
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
@@ -36,14 +29,7 @@ WEBHOOK_URL = os.environ["WEBHOOK_URL"]
 
 AI_MODEL = "gemini-3.7-flash"
 
-ai = genai.Client(api_key=GEMINI_API_KEY)
-
 schedule = []
-
-
-# =========================
-# КЛАВИАТУРЫ
-# =========================
 
 MENU = ReplyKeyboardMarkup(
     [
@@ -70,25 +56,15 @@ SCHEDULE_MENU = ReplyKeyboardMarkup(
 )
 
 
-# =========================
-# ПРОВЕРКА ВЛАДЕЛЬЦА
-# =========================
-
 def is_owner(update: Update) -> bool:
     user = update.effective_user
     return bool(user and user.id == OWNER_ID)
 
 
-# =========================
-# START
-# =========================
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update):
         return
-
     context.user_data.clear()
-
     await update.message.reply_text(
         "👋 Привет!\n\n"
         "Панель управления F1cklock:",
@@ -96,30 +72,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# =========================
-# ОТМЕНА
-# =========================
-
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update):
         return
-
     context.user_data.clear()
-
     await update.message.reply_text(
         "❌ Отменено.",
         reply_markup=MENU,
     )
 
 
-# =========================
-# СОЗДАТЬ ПОСТ
-# =========================
-
 async def create_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["mode"] = "post"
-
     await update.message.reply_text(
         "📝 Отправь текст, фото, видео или файл.\n\n"
         "Я опубликую его в канал.",
@@ -127,57 +92,37 @@ async def create_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# =========================
-# АНОНС
-# =========================
-
 async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["mode"] = "announce"
     context.user_data["step"] = "game"
-
     await update.message.reply_text(
         "🎮 Какая игра?",
         reply_markup=CANCEL,
     )
 
 
-# =========================
-# Я В ЭФИРЕ
-# =========================
-
 async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["mode"] = "live"
     context.user_data["step"] = "game"
-
     await update.message.reply_text(
         "🎮 Во что играем?",
         reply_markup=CANCEL,
     )
 
 
-# =========================
-# КЛИП
-# =========================
-
 async def clip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["mode"] = "clip"
-
     await update.message.reply_text(
         "🎬 Отправь клип.",
         reply_markup=CANCEL,
     )
 
 
-# =========================
-# РАСПИСАНИЕ
-# =========================
-
 async def schedule_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
-
     await update.message.reply_text(
         "📅 Расписание стримов:",
         reply_markup=SCHEDULE_MENU,
@@ -188,7 +133,6 @@ async def add_stream(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["mode"] = "add_stream"
     context.user_data["step"] = "game"
-
     await update.message.reply_text(
         "🎮 Какая игра?",
         reply_markup=CANCEL,
@@ -218,10 +162,7 @@ async def show_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def handle_schedule_game(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def handle_schedule_game(update, context):
     context.user_data["game"] = update.message.text
     context.user_data["step"] = "day"
 
@@ -231,10 +172,7 @@ async def handle_schedule_game(
     )
 
 
-async def handle_schedule_day(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def handle_schedule_day(update, context):
     context.user_data["day"] = update.message.text
     context.user_data["step"] = "time"
 
@@ -244,21 +182,16 @@ async def handle_schedule_day(
     )
 
 
-async def handle_schedule_time(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def handle_schedule_time(update, context):
     game = context.user_data["game"]
     day = context.user_data["day"]
     time = update.message.text
 
-    schedule.append(
-        {
-            "game": game,
-            "day": day,
-            "time": time,
-        }
-    )
+    schedule.append({
+        "game": game,
+        "day": day,
+        "time": time,
+    })
 
     await update.message.reply_text(
         f"✅ Стрим добавлен!\n\n"
@@ -285,10 +218,6 @@ async def handle_schedule_time(
     context.user_data.clear()
 
 
-# =========================
-# ИИ
-# =========================
-
 async def ai_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["mode"] = "ai"
@@ -302,36 +231,84 @@ async def ai_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-def generate_with_gemini(prompt: str):
-    logging.info("Gemini request started")
+async def generate_with_gemini(prompt: str):
+    logging.info("Gemini REST request started")
 
-    response = ai.models.generate_content(
-        model=AI_MODEL,
-        contents=(
-            "Ты SMM-помощник Telegram-канала F1cklock.\n"
-            "Пиши короткие, живые и энергичные посты "
-            "для игрового канала и стримов.\n"
-            "Не используй длинные вступления.\n"
-            "Используй эмодзи умеренно.\n"
-            "Не добавляй пояснения от себя.\n\n"
-            f"Задача пользователя:\n{prompt}"
-        ),
-        config=types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(
-                thinking_level="low"
-            )
-        ),
+    url = (
+        "https://generativelanguage.googleapis.com/"
+        f"v1beta/models/{AI_MODEL}:generateContent"
     )
 
-    logging.info("Gemini request completed")
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": (
+                            "Ты SMM-помощник Telegram-канала F1cklock.\n"
+                            "Пиши короткие, живые и энергичные посты "
+                            "для игрового канала и стримов.\n"
+                            "Не используй длинные вступления.\n"
+                            "Используй эмодзи умеренно.\n"
+                            "Не добавляй пояснения от себя.\n\n"
+                            f"Задача пользователя:\n{prompt}"
+                        )
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.8,
+        },
+    }
 
-    return response.text
+    headers = {
+        "x-goog-api-key": GEMINI_API_KEY,
+        "Content-Type": "application/json",
+    }
+
+    timeout = httpx.Timeout(
+        connect=10.0,
+        read=35.0,
+        write=10.0,
+        pool=10.0,
+    )
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        response = await client.post(
+            url,
+            headers=headers,
+            json=payload,
+        )
+
+    logging.info(
+        "Gemini REST HTTP status: %s",
+        response.status_code,
+    )
+
+    if response.status_code != 200:
+        logging.error(
+            "Gemini REST error: %s",
+            response.text[:1000],
+        )
+        raise RuntimeError(
+            f"Gemini HTTP {response.status_code}"
+        )
+
+    data = response.json()
+
+    try:
+        text = data["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError):
+        logging.error("Unexpected Gemini response: %s", data)
+        raise RuntimeError("Не удалось получить текст Gemini")
+
+    logging.info("Gemini REST request completed")
+
+    return text
 
 
-async def generate_ai(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def generate_ai(update, context):
     prompt = update.message.text
 
     await update.message.reply_text(
@@ -341,13 +318,7 @@ async def generate_ai(
     )
 
     try:
-        text = await asyncio.wait_for(
-            asyncio.to_thread(
-                generate_with_gemini,
-                prompt,
-            ),
-            timeout=45,
-        )
+        text = await generate_with_gemini(prompt)
 
         text = (text or "").strip()
 
@@ -383,19 +354,19 @@ async def generate_ai(
             reply_markup=keyboard,
         )
 
-    except asyncio.TimeoutError:
-        logging.error("Gemini timeout after 45 seconds")
+    except httpx.TimeoutException:
+        logging.exception("Gemini REST timeout")
 
         context.user_data.clear()
 
         await update.message.reply_text(
-            "⏱ Gemini не ответил за 45 секунд.\n\n"
+            "⏱ Gemini не ответил вовремя.\n\n"
             "Попробуй ещё раз.",
             reply_markup=MENU,
         )
 
     except Exception:
-        logging.exception("Gemini error")
+        logging.exception("Gemini REST error")
 
         context.user_data.clear()
 
@@ -406,14 +377,7 @@ async def generate_ai(
         )
 
 
-# =========================
-# КНОПКИ ИИ
-# =========================
-
-async def ai_buttons(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def ai_buttons(update, context):
     query = update.callback_query
 
     if query.from_user.id != OWNER_ID:
@@ -427,7 +391,9 @@ async def ai_buttons(
     if action == "ai_cancel":
         context.user_data.clear()
 
-        await query.edit_message_text("❌ Отменено.")
+        await query.edit_message_text(
+            "❌ Отменено."
+        )
 
         await query.message.reply_text(
             "Главное меню:",
@@ -461,7 +427,9 @@ async def ai_buttons(
             )
 
         except Exception:
-            logging.exception("AI publication error")
+            logging.exception(
+                "AI publication error"
+            )
 
             await query.edit_message_text(
                 "❌ Не удалось опубликовать."
@@ -487,18 +455,16 @@ async def ai_buttons(
                 f"Задача пользователя:\n{old_prompt}"
             )
 
-            text = await asyncio.wait_for(
-                asyncio.to_thread(
-                    generate_with_gemini,
-                    retry_prompt,
-                ),
-                timeout=45,
+            text = await generate_with_gemini(
+                retry_prompt
             )
 
             text = (text or "").strip()
 
             if not text:
-                raise RuntimeError("Gemini вернул пустой ответ")
+                raise RuntimeError(
+                    "Gemini вернул пустой ответ"
+                )
 
             context.user_data["ai_text"] = text
 
@@ -528,16 +494,18 @@ async def ai_buttons(
                 reply_markup=keyboard,
             )
 
-        except asyncio.TimeoutError:
+        except httpx.TimeoutException:
             context.user_data.clear()
 
             await query.message.reply_text(
-                "⏱ Gemini не ответил за 45 секунд.",
+                "⏱ Gemini не ответил вовремя.",
                 reply_markup=MENU,
             )
 
         except Exception:
-            logging.exception("Gemini retry error")
+            logging.exception(
+                "Gemini retry error"
+            )
 
             context.user_data.clear()
 
@@ -547,11 +515,7 @@ async def ai_buttons(
             )
 
 
-# =========================
-# НАСТРОЙКИ
-# =========================
-
-async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def settings(update, context):
     await update.message.reply_text(
         "⚙️ Настройки\n\n"
         "Пока доступны настройки по умолчанию.",
@@ -559,14 +523,7 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-# =========================
-# ПУБЛИКАЦИЯ МЕДИА
-# =========================
-
-async def publish_media(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def publish_media(update, context):
     try:
         await context.bot.copy_message(
             chat_id=CHANNEL,
@@ -582,7 +539,9 @@ async def publish_media(
         context.user_data.clear()
 
     except Exception:
-        logging.exception("Publication error")
+        logging.exception(
+            "Publication error"
+        )
 
         await update.message.reply_text(
             "❌ Ошибка публикации.",
@@ -590,14 +549,7 @@ async def publish_media(
         )
 
 
-# =========================
-# ОБРАБОТКА СООБЩЕНИЙ
-# =========================
-
-async def handle_message(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
+async def handle_message(update, context):
     if not is_owner(update):
         return
 
@@ -655,6 +607,7 @@ async def handle_message(
             "Главное меню:",
             reply_markup=MENU,
         )
+
         return
 
     if context.user_data.get("mode") == "ai":
@@ -663,7 +616,6 @@ async def handle_message(
         return
 
     if context.user_data.get("mode") == "add_stream":
-
         step = context.user_data.get("step")
 
         if step == "game":
@@ -674,22 +626,30 @@ async def handle_message(
                 )
                 return
 
-            await handle_schedule_game(update, context)
+            await handle_schedule_game(
+                update,
+                context,
+            )
             return
 
         if step == "day":
-            await handle_schedule_day(update, context)
+            await handle_schedule_day(
+                update,
+                context,
+            )
             return
 
         if step == "time":
-            await handle_schedule_time(update, context)
+            await handle_schedule_time(
+                update,
+                context,
+            )
             return
 
     mode = context.user_data.get("mode")
     step = context.user_data.get("step")
 
     if step == "game":
-
         if not message.text:
             await update.message.reply_text(
                 "🎮 Напиши название игры текстом.",
@@ -704,25 +664,33 @@ async def handle_message(
             "📝 Теперь отправь текст, фото или видео.",
             reply_markup=CANCEL,
         )
+
         return
 
-    if mode in ["post", "clip", "announce", "live"]:
-        await publish_media(update, context)
+    if mode in [
+        "post",
+        "clip",
+        "announce",
+        "live",
+    ]:
+        await publish_media(
+            update,
+            context,
+        )
         return
 
-
-# =========================
-# ЗАПУСК
-# =========================
 
 def main():
-
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(message)s",
         level=logging.INFO,
     )
 
-    app = Application.builder().token(BOT_TOKEN).build()
+    app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .build()
+    )
 
     app.add_handler(
         CommandHandler("start", start)
@@ -742,7 +710,9 @@ def main():
         )
     )
 
-    print("F1cklock bot starting with webhook...")
+    print(
+        "F1cklock bot starting with webhook..."
+    )
 
     app.run_webhook(
         listen="0.0.0.0",
