@@ -64,7 +64,9 @@ def is_owner(update: Update) -> bool:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update):
         return
+
     context.user_data.clear()
+
     await update.message.reply_text(
         "👋 Привет!\n\n"
         "Панель управления F1cklock:",
@@ -75,7 +77,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_owner(update):
         return
+
     context.user_data.clear()
+
     await update.message.reply_text(
         "❌ Отменено.",
         reply_markup=MENU,
@@ -85,6 +89,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def create_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["mode"] = "post"
+
     await update.message.reply_text(
         "📝 Отправь текст, фото, видео или файл.\n\n"
         "Я опубликую его в канал.",
@@ -96,6 +101,7 @@ async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["mode"] = "announce"
     context.user_data["step"] = "game"
+
     await update.message.reply_text(
         "🎮 Какая игра?",
         reply_markup=CANCEL,
@@ -106,6 +112,7 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["mode"] = "live"
     context.user_data["step"] = "game"
+
     await update.message.reply_text(
         "🎮 Во что играем?",
         reply_markup=CANCEL,
@@ -115,6 +122,7 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def clip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["mode"] = "clip"
+
     await update.message.reply_text(
         "🎬 Отправь клип.",
         reply_markup=CANCEL,
@@ -123,6 +131,7 @@ async def clip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def schedule_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
+
     await update.message.reply_text(
         "📅 Расписание стримов:",
         reply_markup=SCHEDULE_MENU,
@@ -133,6 +142,7 @@ async def add_stream(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     context.user_data["mode"] = "add_stream"
     context.user_data["step"] = "game"
+
     await update.message.reply_text(
         "🎮 Какая игра?",
         reply_markup=CANCEL,
@@ -187,11 +197,13 @@ async def handle_schedule_time(update, context):
     day = context.user_data["day"]
     time = update.message.text
 
-    schedule.append({
-        "game": game,
-        "day": day,
-        "time": time,
-    })
+    schedule.append(
+        {
+            "game": game,
+            "day": day,
+            "time": time,
+        }
+    )
 
     await update.message.reply_text(
         f"✅ Стрим добавлен!\n\n"
@@ -259,6 +271,7 @@ async def generate_with_gemini(prompt: str):
         ],
         "generationConfig": {
             "temperature": 0.8,
+            "maxOutputTokens": 500,
         },
     }
 
@@ -267,45 +280,93 @@ async def generate_with_gemini(prompt: str):
         "Content-Type": "application/json",
     }
 
-    timeout = httpx.Timeout(
-        connect=10.0,
-        read=35.0,
-        write=10.0,
-        pool=10.0,
-    )
+    delays = [5, 15, 30]
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(
-            url,
-            headers=headers,
-            json=payload,
-        )
+    for attempt in range(4):
+        try:
+            timeout = httpx.Timeout(
+                connect=10.0,
+                read=35.0,
+                write=10.0,
+                pool=10.0,
+            )
 
-    logging.info(
-        "Gemini REST HTTP status: %s",
-        response.status_code,
-    )
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.post(
+                    url,
+                    headers=headers,
+                    json=payload,
+                )
 
-    if response.status_code != 200:
-        logging.error(
-            "Gemini REST error: %s",
-            response.text[:1000],
-        )
-        raise RuntimeError(
-            f"Gemini HTTP {response.status_code}"
-        )
+            logging.info(
+                "Gemini REST HTTP status: %s",
+                response.status_code,
+            )
 
-    data = response.json()
+            if response.status_code == 503:
+                if attempt < 3:
+                    logging.warning(
+                        "Gemini 503. Retry in %s seconds.",
+                        delays[attempt],
+                    )
 
-    try:
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-    except (KeyError, IndexError, TypeError):
-        logging.error("Unexpected Gemini response: %s", data)
-        raise RuntimeError("Не удалось получить текст Gemini")
+                    await asyncio.sleep(delays[attempt])
+                    continue
 
-    logging.info("Gemini REST request completed")
+                logging.error(
+                    "Gemini still unavailable after 4 attempts."
+                )
 
-    return text
+                raise RuntimeError("Gemini HTTP 503")
+
+            if response.status_code != 200:
+                logging.error(
+                    "Gemini REST error: %s",
+                    response.text[:1000],
+                )
+
+                raise RuntimeError(
+                    f"Gemini HTTP {response.status_code}"
+                )
+
+            data = response.json()
+
+            try:
+                text = (
+                    data["candidates"][0]
+                    ["content"]["parts"][0]["text"]
+                )
+            except (KeyError, IndexError, TypeError):
+                logging.error(
+                    "Unexpected Gemini response: %s",
+                    data,
+                )
+
+                raise RuntimeError(
+                    "Не удалось получить текст Gemini"
+                )
+
+            logging.info(
+                "Gemini REST request completed"
+            )
+
+            return text
+
+        except httpx.TimeoutException:
+            if attempt < 3:
+                logging.warning(
+                    "Gemini timeout. Retry in %s seconds.",
+                    delays[attempt],
+                )
+
+                await asyncio.sleep(delays[attempt])
+                continue
+
+            logging.exception(
+                "Gemini timeout after all attempts"
+            )
+
+            raise
 
 
 async def generate_ai(update, context):
@@ -323,7 +384,9 @@ async def generate_ai(update, context):
         text = (text or "").strip()
 
         if not text:
-            raise RuntimeError("Gemini вернул пустой ответ")
+            raise RuntimeError(
+                "Gemini вернул пустой ответ"
+            )
 
         context.user_data["ai_text"] = text
         context.user_data["ai_prompt"] = prompt
@@ -355,7 +418,9 @@ async def generate_ai(update, context):
         )
 
     except httpx.TimeoutException:
-        logging.exception("Gemini REST timeout")
+        logging.exception(
+            "Gemini REST timeout"
+        )
 
         context.user_data.clear()
 
@@ -366,7 +431,9 @@ async def generate_ai(update, context):
         )
 
     except Exception:
-        logging.exception("Gemini REST error")
+        logging.exception(
+            "Gemini REST error"
+        )
 
         context.user_data.clear()
 
@@ -436,7 +503,9 @@ async def ai_buttons(update, context):
             )
 
     elif action == "ai_retry":
-        old_prompt = context.user_data.get("ai_prompt")
+        old_prompt = context.user_data.get(
+            "ai_prompt"
+        )
 
         if not old_prompt:
             await query.edit_message_text(
@@ -612,7 +681,10 @@ async def handle_message(update, context):
 
     if context.user_data.get("mode") == "ai":
         if message.text:
-            await generate_ai(update, context)
+            await generate_ai(
+                update,
+                context,
+            )
         return
 
     if context.user_data.get("mode") == "add_stream":
@@ -682,7 +754,11 @@ async def handle_message(update, context):
 
 def main():
     logging.basicConfig(
-        format="%(asctime)s - %(levelname)s - %(message)s",
+        format=(
+            "%(asctime)s - "
+            "%(levelname)s - "
+            "%(message)s"
+        ),
         level=logging.INFO,
     )
 
