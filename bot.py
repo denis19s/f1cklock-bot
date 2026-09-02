@@ -30,7 +30,8 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 CHANNEL = "@F1cklock"
 OWNER_ID = 610625282
 
-# Основная и запасная модели Gemini
+TWITCH_URL = "https://m.twitch.tv/f1cklock/home"
+
 AI_MODELS = [
     "gemini-3.1-flash-lite",
     "gemini-3.5-flash-lite",
@@ -72,6 +73,66 @@ CANCEL_MENU = ReplyKeyboardMarkup(
 )
 
 # =========================
+# AI КНОПКИ
+# =========================
+
+def ai_keyboard():
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "🖼️ Добавить фото",
+                    callback_data="ai_add_photo",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "✅ Опубликовать",
+                    callback_data="ai_publish",
+                ),
+                InlineKeyboardButton(
+                    "🔄 Переделать",
+                    callback_data="ai_retry",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "❌ Отмена",
+                    callback_data="ai_cancel",
+                )
+            ],
+        ]
+    )
+
+
+def ai_photo_keyboard():
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    "✅ Опубликовать",
+                    callback_data="ai_publish",
+                ),
+                InlineKeyboardButton(
+                    "🖼️ Другое фото",
+                    callback_data="ai_add_photo",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    "🔄 Переделать",
+                    callback_data="ai_retry",
+                ),
+                InlineKeyboardButton(
+                    "❌ Отмена",
+                    callback_data="ai_cancel",
+                ),
+            ],
+        ]
+    )
+
+
+# =========================
 # ПРОВЕРКА ВЛАДЕЛЬЦА
 # =========================
 
@@ -81,12 +142,38 @@ def is_owner(update: Update) -> bool:
 
 
 # =========================
+# TWITCH-ССЫЛКА
+# =========================
+
+def fix_twitch_link(text: str) -> str:
+    replacements = [
+        "[ссылка на трансляцию]",
+        "[ссылка на стрим]",
+        "[ссылка]",
+        "<ссылка на трансляцию>",
+        "<ссылка на стрим>",
+        "ССЫЛКА_НА_ТРАНСЛЯЦИЮ",
+        "ССЫЛКА_НА_СТРИМ",
+    ]
+
+    for placeholder in replacements:
+        text = text.replace(
+            placeholder,
+            TWITCH_URL,
+        )
+
+    return text
+
+
+# =========================
 # GEMINI
 # =========================
 
 async def generate_ai_text(prompt: str) -> str:
     if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY не задан")
+        raise RuntimeError(
+            "GEMINI_API_KEY не задан"
+        )
 
     headers = {
         "x-goog-api-key": GEMINI_API_KEY,
@@ -115,16 +202,23 @@ async def generate_ai_text(prompt: str) -> str:
         pool=10.0,
     )
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
+    async with httpx.AsyncClient(
+        timeout=timeout
+    ) as client:
 
-        for model_index, model in enumerate(AI_MODELS):
+        for model_index, model in enumerate(
+            AI_MODELS
+        ):
             url = (
                 "https://generativelanguage.googleapis.com/"
                 f"v1beta/models/{model}:generateContent"
             )
 
             try:
-                logger.info("Gemini request started: %s", model)
+                logger.info(
+                    "Gemini request started: %s",
+                    model,
+                )
 
                 response = await client.post(
                     url,
@@ -141,7 +235,10 @@ async def generate_ai_text(prompt: str) -> str:
                 if response.status_code == 200:
                     data = response.json()
 
-                    candidates = data.get("candidates", [])
+                    candidates = data.get(
+                        "candidates",
+                        [],
+                    )
 
                     if not candidates:
                         raise RuntimeError(
@@ -158,23 +255,28 @@ async def generate_ai_text(prompt: str) -> str:
 
                     for part in parts:
                         text = part.get("text")
+
                         if text:
                             text_parts.append(text)
 
-                    result = "\n".join(text_parts).strip()
+                    result = "\n".join(
+                        text_parts
+                    ).strip()
 
                     if result:
                         logger.info(
                             "Gemini success: %s",
                             model,
                         )
-                        return result
+
+                        return fix_twitch_link(
+                            result
+                        )
 
                     raise RuntimeError(
                         f"Gemini {model}: пустой ответ"
                     )
 
-                # Временные ошибки — пробуем следующую модель
                 if response.status_code in (
                     429,
                     500,
@@ -183,30 +285,31 @@ async def generate_ai_text(prompt: str) -> str:
                     504,
                 ):
                     logger.warning(
-                        "Gemini temporary error: model=%s status=%s",
+                        "Gemini temporary error: "
+                        "model=%s status=%s",
                         model,
                         response.status_code,
                     )
 
-                    if model_index < len(AI_MODELS) - 1:
+                    if model_index < len(
+                        AI_MODELS
+                    ) - 1:
                         await asyncio.sleep(2)
                         continue
 
                     raise RuntimeError(
-                        f"Gemini временно недоступен: "
-                        f"HTTP {response.status_code}"
+                        "Gemini временно недоступен"
                     )
 
-                # Ошибка ключа или запроса
                 logger.error(
-                    "Gemini error: model=%s status=%s body=%s",
+                    "Gemini error: model=%s status=%s",
                     model,
                     response.status_code,
-                    response.text[:500],
                 )
 
                 raise RuntimeError(
-                    f"Gemini HTTP {response.status_code}"
+                    f"Gemini HTTP "
+                    f"{response.status_code}"
                 )
 
             except httpx.TimeoutException:
@@ -215,7 +318,9 @@ async def generate_ai_text(prompt: str) -> str:
                     model,
                 )
 
-                if model_index < len(AI_MODELS) - 1:
+                if model_index < len(
+                    AI_MODELS
+                ) - 1:
                     await asyncio.sleep(2)
                     continue
 
@@ -225,12 +330,15 @@ async def generate_ai_text(prompt: str) -> str:
 
             except httpx.HTTPError as e:
                 logger.warning(
-                    "Gemini HTTP error: model=%s error=%s",
+                    "Gemini HTTP error: "
+                    "model=%s error=%s",
                     model,
                     e,
                 )
 
-                if model_index < len(AI_MODELS) - 1:
+                if model_index < len(
+                    AI_MODELS
+                ) - 1:
                     await asyncio.sleep(2)
                     continue
 
@@ -238,14 +346,19 @@ async def generate_ai_text(prompt: str) -> str:
                     "Ошибка соединения с Gemini"
                 )
 
-    raise RuntimeError("Gemini не смог сгенерировать ответ")
+    raise RuntimeError(
+        "Gemini не смог сгенерировать ответ"
+    )
 
 
 # =========================
 # /START
 # =========================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     if not is_owner(update):
         return
 
@@ -259,7 +372,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # =========================
-# ПУБЛИКАЦИЯ
+# ПУБЛИКАЦИЯ МЕДИА
 # =========================
 
 async def publish_media(
@@ -279,7 +392,7 @@ async def publish_media(
 
 
 # =========================
-# СОЗДАНИЕ ПОСТА
+# ОБЫЧНЫЙ ПОСТ
 # =========================
 
 async def create_post(
@@ -289,7 +402,8 @@ async def create_post(
     context.user_data["mode"] = "post"
 
     await update.message.reply_text(
-        "🎮 Пришли текст, фото, видео или файл для публикации.",
+        "🎮 Пришли текст, фото, видео или файл "
+        "для публикации.",
         reply_markup=CANCEL_MENU,
     )
 
@@ -377,7 +491,10 @@ async def show_schedule(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    schedule = context.bot_data.get("schedule", [])
+    schedule = context.bot_data.get(
+        "schedule",
+        [],
+    )
 
     if not schedule:
         await update.message.reply_text(
@@ -389,7 +506,10 @@ async def show_schedule(
     text = "📋 Расписание:\n\n"
 
     for item in schedule:
-        text += f"🔴 {item['date']} — {item['game']}\n"
+        text += (
+            f"🔴 {item['date']} — "
+            f"{item['game']}\n"
+        )
 
     await update.message.reply_text(
         text,
@@ -407,29 +527,36 @@ async def settings(
 ):
     await update.message.reply_text(
         "⚙️ Настройки\n\n"
-        "Бот работает в режиме публикации в канал.\n"
+        "Бот работает в режиме публикации "
+        "в канал.\n"
         f"Канал: {CHANNEL}",
         reply_markup=MAIN_MENU,
     )
 
 
 # =========================
-# AI
+# AI СТАРТ
 # =========================
 
 async def ai_start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ):
+    context.user_data.clear()
     context.user_data["mode"] = "ai"
 
     await update.message.reply_text(
         "🤖 Напиши тему поста.\n\n"
         "Например:\n"
-        "«Сделай пост о сегодняшнем стриме по CS2»",
+        "«Сделай пост о сегодняшнем "
+        "стриме по CS2»",
         reply_markup=CANCEL_MENU,
     )
 
+
+# =========================
+# ГЕНЕРАЦИЯ AI-ПОСТА
+# =========================
 
 async def generate_ai_post(
     update: Update,
@@ -443,49 +570,55 @@ async def generate_ai_post(
 
     try:
         ai_prompt = (
-            "Ты помогаешь вести Telegram-канал стримера.\n"
-            "Создай короткий, живой и привлекательный пост "
-            "для Telegram на русском языке.\n\n"
+            "Ты помогаешь вести "
+            "Telegram-канал стримера.\n\n"
+
+            "Создай короткий, живой и "
+            "привлекательный пост для Telegram "
+            "на русском языке.\n\n"
+
+            "Стиль: естественный, разговорный, "
+            "без канцелярита и без ощущения "
+            "текста от нейросети.\n\n"
+
             "Не используй слишком много эмодзи.\n"
-            "Не придумывай факты, которых нет в запросе.\n"
-            "Пиши сразу готовый текст поста без пояснений.\n\n"
+
+            "Не придумывай факты, которых нет "
+            "в запросе.\n\n"
+
+            "Если в посте уместен призыв "
+            "посмотреть стрим или присоединиться "
+            "к трансляции, используй эту ссылку:\n"
+            f"{TWITCH_URL}\n\n"
+
+            "Никогда не пиши заглушки вроде "
+            "[ссылка на трансляцию], "
+            "[ссылка на стрим] или [ссылка].\n\n"
+
+            "Пиши сразу готовый текст поста "
+            "без пояснений.\n\n"
+
             f"Тема:\n{prompt}"
         )
 
-        text = await generate_ai_text(ai_prompt)
-
-        keyboard = InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton(
-                        "✅ Опубликовать",
-                        callback_data="ai_publish",
-                    ),
-                    InlineKeyboardButton(
-                        "🔄 Переделать",
-                        callback_data="ai_retry",
-                    ),
-                ],
-                [
-                    InlineKeyboardButton(
-                        "❌ Отмена",
-                        callback_data="ai_cancel",
-                    )
-                ],
-            ]
+        text = await generate_ai_text(
+            ai_prompt
         )
 
         context.user_data["ai_text"] = text
         context.user_data["ai_prompt"] = prompt
+        context.user_data["ai_photo"] = None
+        context.user_data["mode"] = "ai"
 
         await waiting.edit_text(
-            "🤖 Готово!\n\n"
-            + text,
-            reply_markup=keyboard,
+            "🤖 Готово!\n\n" + text,
+            reply_markup=ai_keyboard(),
         )
 
-    except Exception as e:
-        logger.exception("Gemini error")
+    except Exception:
+        logger.exception(
+            "Gemini error"
+        )
 
         await waiting.edit_text(
             "❌ Gemini сейчас не смог ответить.\n\n"
@@ -509,6 +642,25 @@ async def ai_buttons(
 
     await query.answer()
 
+    # -------------------------
+    # ДОБАВИТЬ ФОТО
+    # -------------------------
+
+    if query.data == "ai_add_photo":
+        context.user_data["mode"] = "ai_photo"
+
+        await query.message.reply_text(
+            "🖼️ Пришли фотографию.\n\n"
+            "Я добавлю её к этому AI-посту.",
+            reply_markup=CANCEL_MENU,
+        )
+
+        return
+
+    # -------------------------
+    # ОТМЕНА
+    # -------------------------
+
     if query.data == "ai_cancel":
         context.user_data.clear()
 
@@ -523,8 +675,18 @@ async def ai_buttons(
 
         return
 
+    # -------------------------
+    # ОПУБЛИКОВАТЬ
+    # -------------------------
+
     if query.data == "ai_publish":
-        text = context.user_data.get("ai_text")
+        text = context.user_data.get(
+            "ai_text"
+        )
+
+        photo_id = context.user_data.get(
+            "ai_photo"
+        )
 
         if not text:
             await query.edit_message_text(
@@ -532,11 +694,38 @@ async def ai_buttons(
             )
             return
 
+        text = fix_twitch_link(text)
+
         try:
-            await context.bot.send_message(
-                chat_id=CHANNEL,
-                text=text,
-            )
+            # Если есть фото — публикуем фото
+            # с текстом в caption
+            if photo_id:
+
+                # Telegram caption ограничен 1024 символами.
+                if len(text) <= 1024:
+                    await context.bot.send_photo(
+                        chat_id=CHANNEL,
+                        photo=photo_id,
+                        caption=text,
+                    )
+
+                else:
+                    await context.bot.send_photo(
+                        chat_id=CHANNEL,
+                        photo=photo_id,
+                    )
+
+                    await context.bot.send_message(
+                        chat_id=CHANNEL,
+                        text=text,
+                    )
+
+            # Если фото нет — публикуем обычный текст
+            else:
+                await context.bot.send_message(
+                    chat_id=CHANNEL,
+                    text=text,
+                )
 
             context.user_data.clear()
 
@@ -550,7 +739,9 @@ async def ai_buttons(
             )
 
         except Exception:
-            logger.exception("Publish error")
+            logger.exception(
+                "AI publish error"
+            )
 
             await query.edit_message_text(
                 "❌ Не удалось опубликовать пост."
@@ -558,8 +749,14 @@ async def ai_buttons(
 
         return
 
+    # -------------------------
+    # ПЕРЕДЕЛАТЬ
+    # -------------------------
+
     if query.data == "ai_retry":
-        prompt = context.user_data.get("ai_prompt")
+        prompt = context.user_data.get(
+            "ai_prompt"
+        )
 
         if not prompt:
             await query.edit_message_text(
@@ -573,45 +770,41 @@ async def ai_buttons(
 
         try:
             ai_prompt = (
-                "Создай другой вариант поста для Telegram "
-                "на русском языке.\n"
-                "Сделай его живым, коротким и естественным.\n"
-                "Не объясняй, что ты сделал — дай только готовый пост.\n\n"
+                "Создай другой вариант поста "
+                "для Telegram на русском языке.\n\n"
+
+                "Сделай его живым, коротким "
+                "и естественным.\n\n"
+
+                "Если уместен призыв посмотреть "
+                "стрим, используй эту ссылку:\n"
+                f"{TWITCH_URL}\n\n"
+
+                "Никогда не используй заглушки "
+                "[ссылка на трансляцию], "
+                "[ссылка на стрим] или [ссылка].\n\n"
+
+                "Не объясняй, что ты сделал — "
+                "дай только готовый пост.\n\n"
+
                 f"Тема:\n{prompt}"
             )
 
-            text = await generate_ai_text(ai_prompt)
+            text = await generate_ai_text(
+                ai_prompt
+            )
 
             context.user_data["ai_text"] = text
 
-            keyboard = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "✅ Опубликовать",
-                            callback_data="ai_publish",
-                        ),
-                        InlineKeyboardButton(
-                            "🔄 Переделать",
-                            callback_data="ai_retry",
-                        ),
-                    ],
-                    [
-                        InlineKeyboardButton(
-                            "❌ Отмена",
-                            callback_data="ai_cancel",
-                        )
-                    ],
-                ]
-            )
-
             await query.edit_message_text(
                 "🤖 Новый вариант:\n\n" + text,
-                reply_markup=keyboard,
+                reply_markup=ai_keyboard(),
             )
 
         except Exception:
-            logger.exception("Gemini retry error")
+            logger.exception(
+                "Gemini retry error"
+            )
 
             await query.edit_message_text(
                 "❌ Gemini снова не ответил.\n"
@@ -637,7 +830,10 @@ async def handle_message(
 
     text = message.text or ""
 
-    # Отмена
+    # =====================
+    # ОТМЕНА
+    # =====================
+
     if text == "❌ Отмена":
         context.user_data.clear()
 
@@ -648,33 +844,106 @@ async def handle_message(
 
         return
 
-    # Главное меню
+    # =====================
+    # ДОБАВЛЕНИЕ ФОТО К AI
+    # =====================
+
+    if (
+        context.user_data.get("mode")
+        == "ai_photo"
+    ):
+        if message.photo:
+
+            photo_id = (
+                message.photo[-1].file_id
+            )
+
+            context.user_data[
+                "ai_photo"
+            ] = photo_id
+
+            context.user_data[
+                "mode"
+            ] = "ai"
+
+            ai_text = context.user_data.get(
+                "ai_text",
+                "",
+            )
+
+            ai_text = fix_twitch_link(
+                ai_text
+            )
+
+            await message.reply_photo(
+                photo=photo_id,
+                caption=(
+                    "🖼️ Фото добавлено!\n\n"
+                    + ai_text
+                ),
+                reply_markup=ai_photo_keyboard(),
+            )
+
+            return
+
+        await message.reply_text(
+            "🖼️ Нужно отправить именно фотографию.",
+            reply_markup=CANCEL_MENU,
+        )
+
+        return
+
+    # =====================
+    # ГЛАВНОЕ МЕНЮ
+    # =====================
+
     if text == "🎮 Создать пост":
-        await create_post(update, context)
+        await create_post(
+            update,
+            context,
+        )
         return
 
     if text == "🔴 Анонс стрима":
-        await stream_announce(update, context)
+        await stream_announce(
+            update,
+            context,
+        )
         return
 
     if text == "📡 Я в эфире":
-        await live_stream(update, context)
+        await live_stream(
+            update,
+            context,
+        )
         return
 
     if text == "📅 Расписание":
-        await schedule_menu(update, context)
+        await schedule_menu(
+            update,
+            context,
+        )
         return
 
     if text == "🎬 Клип":
-        await create_clip(update, context)
+        await create_clip(
+            update,
+            context,
+        )
         return
 
     if text == "🤖 Создать с ИИ":
-        await ai_start(update, context)
+        await ai_start(
+            update,
+            context,
+        )
         return
 
     if text == "⚙️ Настройки":
-        await settings(update, context)
+        await settings(
+            update,
+            context,
+        )
         return
 
     if text == "⬅️ Главное меню":
@@ -688,11 +957,17 @@ async def handle_message(
         return
 
     if text == "➕ Добавить стрим":
-        await add_stream(update, context)
+        await add_stream(
+            update,
+            context,
+        )
         return
 
     if text == "📋 Показать расписание":
-        await show_schedule(update, context)
+        await show_schedule(
+            update,
+            context,
+        )
         return
 
     # =====================
@@ -700,24 +975,36 @@ async def handle_message(
     # =====================
 
     if context.user_data.get("mode") == "ai":
+
         if message.text:
             await generate_ai_post(
                 update,
                 context,
                 message.text,
             )
+
         return
 
     # =====================
     # РАСПИСАНИЕ
     # =====================
 
-    if context.user_data.get("mode") == "schedule":
-        step = context.user_data.get("step")
+    if (
+        context.user_data.get("mode")
+        == "schedule"
+    ):
+        step = context.user_data.get(
+            "step"
+        )
 
         if step == "date":
-            context.user_data["date"] = text
-            context.user_data["step"] = "game"
+            context.user_data[
+                "date"
+            ] = text
+
+            context.user_data[
+                "step"
+            ] = "game"
 
             await message.reply_text(
                 "🎮 Теперь напиши название игры.",
@@ -727,11 +1014,15 @@ async def handle_message(
             return
 
         if step == "game":
-            date = context.user_data.get("date")
+            date = context.user_data.get(
+                "date"
+            )
 
-            schedule = context.bot_data.setdefault(
-                "schedule",
-                [],
+            schedule = (
+                context.bot_data.setdefault(
+                    "schedule",
+                    [],
+                )
             )
 
             schedule.append(
@@ -744,7 +1035,8 @@ async def handle_message(
             context.user_data.clear()
 
             await message.reply_text(
-                "✅ Стрим добавлен в расписание.",
+                "✅ Стрим добавлен "
+                "в расписание.",
                 reply_markup=MAIN_MENU,
             )
 
@@ -754,24 +1046,40 @@ async def handle_message(
     # АНОНС / ЭФИР
     # =====================
 
-    mode = context.user_data.get("mode")
-    step = context.user_data.get("step")
+    mode = context.user_data.get(
+        "mode"
+    )
 
-    if mode in ("announce", "live"):
+    step = context.user_data.get(
+        "step"
+    )
+
+    if mode in (
+        "announce",
+        "live",
+    ):
         if step == "game":
-            context.user_data["game"] = text
-            context.user_data["step"] = "content"
+            context.user_data[
+                "game"
+            ] = text
+
+            context.user_data[
+                "step"
+            ] = "content"
 
             await message.reply_text(
-                "📝 Теперь пришли текст, фото или видео "
-                "для поста.",
+                "📝 Теперь пришли текст, "
+                "фото или видео для поста.",
                 reply_markup=CANCEL_MENU,
             )
 
             return
 
         if step == "content":
-            await publish_media(update, context)
+            await publish_media(
+                update,
+                context,
+            )
 
             context.user_data.clear()
 
@@ -786,8 +1094,14 @@ async def handle_message(
     # ОБЫЧНЫЙ ПОСТ / КЛИП
     # =====================
 
-    if mode in ("post", "clip"):
-        await publish_media(update, context)
+    if mode in (
+        "post",
+        "clip",
+    ):
+        await publish_media(
+            update,
+            context,
+        )
 
         context.user_data.clear()
 
@@ -800,18 +1114,23 @@ async def handle_message(
 
 
 # =========================
-# АВТОАНОНС РАСПИСАНИЯ
+# АВТООБЪЯВЛЕНИЕ РАСПИСАНИЯ
 # =========================
 
 async def schedule_checker(
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    schedule = context.bot_data.get("schedule", [])
+    schedule = context.bot_data.get(
+        "schedule",
+        [],
+    )
 
     if not schedule:
         return
 
-    now = datetime.now().strftime("%d.%m %H:%M")
+    now = datetime.now().strftime(
+        "%d.%m %H:%M"
+    )
 
     for item in schedule[:]:
         if item["date"] == now:
@@ -838,10 +1157,14 @@ async def schedule_checker(
 
 def main():
     if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN не задан")
+        raise RuntimeError(
+            "BOT_TOKEN не задан"
+        )
 
     if not WEBHOOK_URL:
-        raise RuntimeError("WEBHOOK_URL не задан")
+        raise RuntimeError(
+            "WEBHOOK_URL не задан"
+        )
 
     application = (
         Application.builder()
@@ -850,32 +1173,44 @@ def main():
     )
 
     application.add_handler(
-        CommandHandler("start", start)
+        CommandHandler(
+            "start",
+            start,
+        )
     )
 
     application.add_handler(
-        CallbackQueryHandler(ai_buttons)
+        CallbackQueryHandler(
+            ai_buttons
+        )
     )
 
     application.add_handler(
         MessageHandler(
-            filters.ALL & ~filters.COMMAND,
+            filters.ALL
+            & ~filters.COMMAND,
             handle_message,
         )
     )
 
-    # Проверка расписания каждую минуту
     application.job_queue.run_repeating(
         schedule_checker,
         interval=60,
         first=10,
     )
 
-    logger.info("Bot starting...")
+    logger.info(
+        "Bot starting..."
+    )
 
     application.run_webhook(
         listen="0.0.0.0",
-        port=int(os.getenv("PORT", "10000")),
+        port=int(
+            os.getenv(
+                "PORT",
+                "10000",
+            )
+        ),
         webhook_url=WEBHOOK_URL,
         drop_pending_updates=True,
     )
