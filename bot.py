@@ -1,7 +1,10 @@
 import os
 import asyncio
 import logging
+import html
+import xml.etree.ElementTree as ET
 from datetime import datetime
+from urllib.parse import quote_plus
 
 import httpx
 
@@ -66,6 +69,7 @@ STYLES = {
             "Не пиши как официальное СМИ."
         ),
     },
+
     "bold": {
         "name": "🔥 Дерзкий",
         "prompt": (
@@ -73,6 +77,7 @@ STYLES = {
             "немного провокационный, но без перебора."
         ),
     },
+
     "funny": {
         "name": "😂 С юмором",
         "prompt": (
@@ -80,6 +85,7 @@ STYLES = {
             "мемный оттенок, но текст должен оставаться понятным."
         ),
     },
+
     "calm": {
         "name": "😎 Спокойный",
         "prompt": (
@@ -87,6 +93,7 @@ STYLES = {
             "без лишнего хайпа и большого количества эмодзи."
         ),
     },
+
     "gaming": {
         "name": "🎮 Игровой",
         "prompt": (
@@ -94,6 +101,7 @@ STYLES = {
             "геймерский сленг в разумных пределах."
         ),
     },
+
     "news": {
         "name": "📰 Новостной",
         "prompt": (
@@ -101,26 +109,27 @@ STYLES = {
             "Главный факт должен быть понятен с первых строк."
         ),
     },
+
     "toxic": {
         "name": "💀 Токсичный",
         "prompt": (
             "Токсичный игровой стиль: дерзко, саркастично "
-            "и с характером, но без оскорблений защищённых групп "
-            "и без чрезмерной грубости."
+            "и с характером, но без чрезмерной грубости."
         ),
     },
+
     "short": {
         "name": "⚡ Очень короткий",
         "prompt": (
-            "Очень короткий стиль: максимум смысла в нескольких "
-            "строках. Никакой воды."
+            "Очень короткий стиль: максимум смысла "
+            "в нескольких строках. Никакой воды."
         ),
     },
 }
 
 
 # =========================================================
-# ИГРЫ ДЛЯ НОВОСТЕЙ
+# ИГРЫ
 # =========================================================
 
 NEWS_GAMES = {
@@ -131,7 +140,7 @@ NEWS_GAMES = {
     "minecraft": "Minecraft",
     "dota2": "Dota 2",
     "valorant": "Valorant",
-    "other": "Другие игры",
+    "other": "Игры",
 }
 
 
@@ -171,6 +180,7 @@ CANCEL_MENU = ReplyKeyboardMarkup(
 # =========================================================
 
 def is_owner(update: Update) -> bool:
+
     user = update.effective_user
 
     return bool(
@@ -195,6 +205,7 @@ def fix_twitch_link(text: str) -> str:
     ]
 
     for placeholder in replacements:
+
         text = text.replace(
             placeholder,
             TWITCH_URL,
@@ -207,9 +218,8 @@ def fix_twitch_link(text: str) -> str:
 # КЛАВИАТУРА СТИЛЕЙ
 # =========================================================
 
-def styles_keyboard(
-    prefix="style",
-):
+def styles_keyboard(prefix="style"):
+
     buttons = []
 
     items = list(
@@ -221,9 +231,11 @@ def styles_keyboard(
         len(items),
         2,
     ):
+
         row = []
 
         for key, data in items[i:i + 2]:
+
             row.append(
                 InlineKeyboardButton(
                     data["name"],
@@ -335,10 +347,10 @@ def ai_photo_keyboard():
 
 async def gemini_request(
     prompt: str,
-    use_search=False,
 ) -> str:
 
     if not GEMINI_API_KEY:
+
         raise RuntimeError(
             "GEMINI_API_KEY не задан"
         )
@@ -363,14 +375,6 @@ async def gemini_request(
         },
     }
 
-    # Google Search для новостей
-    if use_search:
-        payload["tools"] = [
-            {
-                "google_search": {}
-            }
-        ]
-
     timeout = httpx.Timeout(
         connect=10.0,
         read=40.0,
@@ -394,9 +398,8 @@ async def gemini_request(
             try:
 
                 logger.info(
-                    "Gemini request: model=%s search=%s",
+                    "Gemini request: %s",
                     model,
-                    use_search,
                 )
 
                 response = await client.post(
@@ -421,6 +424,7 @@ async def gemini_request(
                     )
 
                     if not candidates:
+
                         raise RuntimeError(
                             "Gemini: нет candidates"
                         )
@@ -440,6 +444,7 @@ async def gemini_request(
                         )
 
                         if text:
+
                             text_parts.append(
                                 text
                             )
@@ -449,6 +454,7 @@ async def gemini_request(
                     ).strip()
 
                     if result:
+
                         return fix_twitch_link(
                             result
                         )
@@ -466,7 +472,9 @@ async def gemini_request(
                 ):
 
                     logger.warning(
-                        "Gemini temporary error: %s",
+                        "Gemini temporary error: "
+                        "model=%s status=%s",
+                        model,
                         response.status_code,
                     )
 
@@ -484,9 +492,14 @@ async def gemini_request(
                         "Gemini временно недоступен"
                     )
 
+                error_text = response.text[:1000]
+
                 logger.error(
-                    "Gemini error: %s",
+                    "Gemini error: "
+                    "model=%s status=%s body=%s",
+                    model,
                     response.status_code,
+                    error_text,
                 )
 
                 raise RuntimeError(
@@ -542,7 +555,28 @@ async def gemini_request(
 
 
 # =========================================================
-# ГЕНЕРАЦИЯ AI ПОСТА
+# AI СТАРТ
+# =========================================================
+
+async def ai_start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    context.user_data.clear()
+
+    context.user_data[
+        "mode"
+    ] = "ai_choose_style"
+
+    await update.message.reply_text(
+        "🎨 Выбери стиль AI-поста:",
+        reply_markup=styles_keyboard(),
+    )
+
+
+# =========================================================
+# ГЕНЕРАЦИЯ AI
 # =========================================================
 
 async def generate_ai_post(
@@ -571,22 +605,21 @@ async def generate_ai_post(
             "Ты помогаешь вести Telegram-канал "
             "стримера F1cklock.\n\n"
 
-            f"Стиль текста:\n"
+            f"Стиль:\n"
             f"{style['prompt']}\n\n"
 
             "Создай готовый пост для Telegram "
             "на русском языке.\n\n"
 
             "Пост должен быть живым, естественным "
-            "и интересным.\n\n"
+            "и интересным.\n"
 
             "Не используй канцелярит.\n"
-            "Не объясняй свою работу.\n"
             "Не придумывай факты.\n"
             "Не используй слишком много эмодзи.\n\n"
 
             "Если уместно пригласить зрителей "
-            "на стрим, используй реальную ссылку:\n"
+            "на стрим, используй ссылку:\n"
             f"{TWITCH_URL}\n\n"
 
             "Никогда не используй заглушки "
@@ -602,10 +635,21 @@ async def generate_ai_post(
             ai_prompt
         )
 
-        context.user_data["ai_text"] = text
-        context.user_data["ai_prompt"] = prompt
-        context.user_data["ai_photo"] = None
-        context.user_data["mode"] = "ai"
+        context.user_data[
+            "ai_text"
+        ] = text
+
+        context.user_data[
+            "ai_prompt"
+        ] = prompt
+
+        context.user_data[
+            "ai_photo"
+        ] = None
+
+        context.user_data[
+            "mode"
+        ] = "ai"
 
         await waiting.edit_text(
             "🤖 Готово!\n\n"
@@ -627,222 +671,7 @@ async def generate_ai_post(
 
 
 # =========================================================
-# /START
-# =========================================================
-
-async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    if not is_owner(update):
-        return
-
-    context.user_data.clear()
-
-    await update.message.reply_text(
-        "👋 Привет!\n\n"
-        "Я готов публиковать посты в канал.",
-        reply_markup=MAIN_MENU,
-    )
-
-
-# =========================================================
-# ОБЫЧНАЯ ПУБЛИКАЦИЯ
-# =========================================================
-
-async def publish_media(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    message = update.message
-
-    if not message:
-        return
-
-    await context.bot.copy_message(
-        chat_id=CHANNEL,
-        from_chat_id=message.chat_id,
-        message_id=message.message_id,
-    )
-
-
-# =========================================================
-# ОБЫЧНЫЙ ПОСТ
-# =========================================================
-
-async def create_post(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    context.user_data["mode"] = "post"
-
-    await update.message.reply_text(
-        "🎮 Пришли текст, фото, видео или файл "
-        "для публикации.",
-        reply_markup=CANCEL_MENU,
-    )
-
-
-# =========================================================
-# АНОНС
-# =========================================================
-
-async def stream_announce(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    context.user_data["mode"] = "announce"
-    context.user_data["step"] = "game"
-
-    await update.message.reply_text(
-        "🔴 Напиши название игры/стрима.",
-        reply_markup=CANCEL_MENU,
-    )
-
-
-# =========================================================
-# Я В ЭФИРЕ
-# =========================================================
-
-async def live_stream(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    context.user_data["mode"] = "live"
-    context.user_data["step"] = "game"
-
-    await update.message.reply_text(
-        "📡 Напиши название игры/стрима.",
-        reply_markup=CANCEL_MENU,
-    )
-
-
-# =========================================================
-# КЛИП
-# =========================================================
-
-async def create_clip(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    context.user_data["mode"] = "clip"
-
-    await update.message.reply_text(
-        "🎬 Пришли клип или видео.",
-        reply_markup=CANCEL_MENU,
-    )
-
-
-# =========================================================
-# РАСПИСАНИЕ
-# =========================================================
-
-async def schedule_menu(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    await update.message.reply_text(
-        "📅 Расписание:",
-        reply_markup=SCHEDULE_MENU,
-    )
-
-
-async def add_stream(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    context.user_data["mode"] = "schedule"
-    context.user_data["step"] = "date"
-
-    await update.message.reply_text(
-        "📅 Напиши дату и время стрима.\n\n"
-        "Например:\n"
-        "05.09 20:00",
-        reply_markup=CANCEL_MENU,
-    )
-
-
-async def show_schedule(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    schedule = context.bot_data.get(
-        "schedule",
-        [],
-    )
-
-    if not schedule:
-
-        await update.message.reply_text(
-            "📋 Расписание пока пустое.",
-            reply_markup=SCHEDULE_MENU,
-        )
-
-        return
-
-    text = "📋 Расписание:\n\n"
-
-    for item in schedule:
-
-        text += (
-            f"🔴 {item['date']} — "
-            f"{item['game']}\n"
-        )
-
-    await update.message.reply_text(
-        text,
-        reply_markup=SCHEDULE_MENU,
-    )
-
-
-# =========================================================
-# НАСТРОЙКИ
-# =========================================================
-
-async def settings(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    await update.message.reply_text(
-        "⚙️ Настройки\n\n"
-        "Бот работает в режиме публикации "
-        "в канал.\n\n"
-        f"Канал: {CHANNEL}",
-        reply_markup=MAIN_MENU,
-    )
-
-
-# =========================================================
-# AI СТАРТ
-# =========================================================
-
-async def ai_start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    context.user_data.clear()
-
-    context.user_data["mode"] = "ai_choose_style"
-
-    await update.message.reply_text(
-        "🎨 Выбери стиль AI-поста:",
-        reply_markup=styles_keyboard(),
-    )
-
-
-# =========================================================
-# НОВОСТИ — СТАРТ
+# НОВОСТИ — МЕНЮ
 # =========================================================
 
 async def news_start(
@@ -851,8 +680,6 @@ async def news_start(
 ):
 
     context.user_data.clear()
-
-    context.user_data["mode"] = "news_choose_game"
 
     keyboard = []
 
@@ -898,164 +725,510 @@ async def news_start(
 
 
 # =========================================================
-# ПОИСК НОВОСТЕЙ
+# GOOGLE NEWS RSS
 # =========================================================
 
-async def search_news(
-    query,
-    context,
-    telegram_message,
+async def fetch_game_news(
+    game_name: str,
 ):
 
-    await telegram_message.edit_text(
-        "📰 Ищу свежие новости...\n\n"
-        "Подожди несколько секунд."
+    query = quote_plus(
+        f"{game_name} gaming news"
+    )
+
+    url = (
+        "https://news.google.com/rss/search"
+        f"?q={query}"
+        "&hl=ru"
+        "&gl=RU"
+        "&ceid=RU:ru"
+    )
+
+    timeout = httpx.Timeout(
+        connect=10.0,
+        read=20.0,
+        write=10.0,
+        pool=10.0,
+    )
+
+    async with httpx.AsyncClient(
+        timeout=timeout,
+        follow_redirects=True,
+        headers={
+            "User-Agent":
+            "Mozilla/5.0 "
+            "(compatible; F1cklockBot/1.0)"
+        },
+    ) as client:
+
+        response = await client.get(
+            url
+        )
+
+        response.raise_for_status()
+
+        root = ET.fromstring(
+            response.content
+        )
+
+    news = []
+
+    for item in root.findall(
+        ".//item"
+    ):
+
+        title_element = item.find(
+            "title"
+        )
+
+        link_element = item.find(
+            "link"
+        )
+
+        date_element = item.find(
+            "pubDate"
+        )
+
+        source_element = item.find(
+            "source"
+        )
+
+        if title_element is None:
+            continue
+
+        title = html.unescape(
+            title_element.text or ""
+        ).strip()
+
+        link = ""
+
+        if link_element is not None:
+            link = (
+                link_element.text or ""
+            ).strip()
+
+        date = ""
+
+        if date_element is not None:
+            date = (
+                date_element.text or ""
+            ).strip()
+
+        source = ""
+
+        if source_element is not None:
+            source = (
+                source_element.text or ""
+            ).strip()
+
+        if not title:
+            continue
+
+        news.append(
+            {
+                "title": title,
+                "link": link,
+                "date": date,
+                "source": source,
+            }
+        )
+
+        if len(news) >= 5:
+            break
+
+    return news
+
+
+# =========================================================
+# ПОКАЗ НОВОСТЕЙ
+# =========================================================
+
+async def show_game_news(
+    query,
+    context,
+    game_name,
+):
+
+    await query.edit_message_text(
+        "📰 Ищу свежие новости..."
     )
 
     try:
 
-        prompt = (
-            "Найди самые свежие и действительно "
-            "существенные новости по игре:\n"
-            f"{query}\n\n"
-
-            "Используй Google Search.\n"
-            "Ориентируйся на актуальные публикации "
-            "и официальные источники, если они доступны.\n\n"
-
-            "Выбери до 5 интересных новостей.\n\n"
-
-            "Для каждой новости напиши:\n"
-            "1. Короткий заголовок\n"
-            "2. Что произошло — 1-2 предложения\n"
-            "3. Источник и URL\n\n"
-
-            "Не придумывай новости и ссылки.\n"
-            "Если свежих важных новостей мало — "
-            "покажи только найденные."
+        news = await fetch_game_news(
+            game_name
         )
 
-        result = await gemini_request(
-            prompt,
-            use_search=True,
+        if not news:
+
+            await query.edit_message_text(
+                "📰 Свежих новостей не найдено.\n\n"
+                "Попробуй другую игру."
+            )
+
+            return
+
+        context.user_data[
+            "news_items"
+        ] = news
+
+        context.user_data[
+            "news_game"
+        ] = game_name
+
+        keyboard = []
+
+        for index, item in enumerate(
+            news
+        ):
+
+            title = item["title"]
+
+            if len(title) > 55:
+                title = title[:52] + "..."
+
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        f"📰 {index + 1}. {title}",
+                        callback_data=(
+                            f"news_item_{index}"
+                        ),
+                    )
+                ]
+            )
+
+        keyboard.append(
+            [
+                InlineKeyboardButton(
+                    "🔄 Обновить",
+                    callback_data="news_refresh",
+                )
+            ]
         )
 
-        context.user_data[
-            "news_result"
-        ] = result
-
-        context.user_data[
-            "mode"
-        ] = "news_results"
-
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    "🤖 Выбрать новость",
-                    callback_data="news_select",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "🔄 Искать снова",
-                    callback_data="news_search_again",
-                )
-            ],
+        keyboard.append(
             [
                 InlineKeyboardButton(
                     "❌ Закрыть",
                     callback_data="global_cancel",
                 )
-            ],
-        ]
+            ]
+        )
 
-        await telegram_message.edit_text(
-            "📰 Свежие новости:\n\n"
-            f"{result}",
+        text = (
+            f"📰 Новости: {game_name}\n\n"
+            "Выбери новость:"
+        )
+
+        await query.edit_message_text(
+            text,
             reply_markup=InlineKeyboardMarkup(
                 keyboard
             ),
         )
 
-    except Exception:
+    except Exception as e:
 
         logger.exception(
-            "News search error"
+            "News RSS error"
         )
 
-        await telegram_message.edit_text(
+        await query.edit_message_text(
             "❌ Не удалось получить новости.\n\n"
+            "Ошибка поиска новостей.\n"
             "Попробуй ещё раз."
         )
 
 
 # =========================================================
-# AI ПО НОВОСТИ
+# NEWS CALLBACK
 # =========================================================
 
-async def create_post_from_news(
-    update,
-    context,
-    news_text,
+async def news_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
 ):
 
     query = update.callback_query
 
-    await query.edit_message_text(
-        "🤖 Делаю пост из новости..."
-    )
+    if query.from_user.id != OWNER_ID:
 
-    style_key = context.user_data.get(
-        "news_style",
-        "f1cklock",
-    )
+        await query.answer()
 
-    style = STYLES.get(
-        style_key,
-        STYLES["f1cklock"],
-    )
+        return
 
-    prompt = (
-        "Ты ведёшь Telegram-канал стримера F1cklock.\n\n"
+    await query.answer()
 
-        f"Используй стиль:\n"
-        f"{style['prompt']}\n\n"
+    data = query.data
 
-        "На основе новости ниже создай "
-        "готовый Telegram-пост на русском языке.\n\n"
+    # =====================================================
+    # ВЫБОР ИГРЫ
+    # =====================================================
 
-        "Сохрани фактический смысл новости.\n"
-        "Не придумывай детали.\n"
-        "Не пиши длинную статью.\n"
-        "Не говори, что ты AI.\n"
-        "Не используй заглушки для ссылок.\n\n"
+    if data.startswith(
+        "news_game_"
+    ):
 
-        "Сделай пост интересным для игровой аудитории.\n\n"
+        game_key = data[
+            len("news_game_"):
+        ]
 
-        "НОВОСТЬ:\n"
-        f"{news_text}"
-    )
-
-    try:
-
-        text = await gemini_request(
-            prompt
+        game_name = NEWS_GAMES.get(
+            game_key
         )
 
-        context.user_data[
-            "ai_text"
-        ] = text
+        if not game_name:
+            return
 
-        context.user_data[
-            "ai_prompt"
-        ] = (
-            "Создать пост из этой новости:\n"
-            + news_text
+        await show_game_news(
+            query,
+            context,
+            game_name,
         )
 
+        return
+
+    # =====================================================
+    # ОБНОВИТЬ НОВОСТИ
+    # =====================================================
+
+    if data == "news_refresh":
+
+        game_name = context.user_data.get(
+            "news_game"
+        )
+
+        if not game_name:
+            return
+
+        await show_game_news(
+            query,
+            context,
+            game_name,
+        )
+
+        return
+
+    # =====================================================
+    # ВЫБРАТЬ НОВОСТЬ
+    # =====================================================
+
+    if data.startswith(
+        "news_item_"
+    ):
+
+        try:
+
+            index = int(
+                data[
+                    len("news_item_"):
+                ]
+            )
+
+        except ValueError:
+
+            return
+
+        news_items = context.user_data.get(
+            "news_items",
+            [],
+        )
+
+        if index < 0 or index >= len(
+            news_items
+        ):
+
+            await query.message.reply_text(
+                "❌ Новость больше недоступна."
+            )
+
+            return
+
+        selected = news_items[
+            index
+        ]
+
         context.user_data[
-            "ai_photo"
-        ] = None
+            "selected_news"
+        ] = selected
+
+        context.user_data[
+            "mode"
+        ] = "news_choose_style"
+
+        text = (
+            "📰 Выбрана новость:\n\n"
+            f"{selected['title']}\n\n"
+        )
+
+        if selected.get(
+            "source"
+        ):
+
+            text += (
+                f"Источник: "
+                f"{selected['source']}\n\n"
+            )
+
+        text += (
+            "🎨 Теперь выбери стиль:"
+        )
+
+        await query.message.reply_text(
+            text,
+            reply_markup=styles_keyboard(
+                prefix="news_style"
+            ),
+        )
+
+        return
+
+    # =====================================================
+    # СТИЛЬ НОВОСТИ
+    # =====================================================
+
+    if data.startswith(
+        "news_style_"
+    ):
+
+        style_key = data[
+            len("news_style_"):
+        ]
+
+        if style_key not in STYLES:
+            return
+
+        selected = context.user_data.get(
+            "selected_news"
+        )
+
+        if not selected:
+            return
+
+        context.user_data[
+            "news_style"
+        ] = style_key
+
+        style = STYLES[
+            style_key
+        ]
+
+        await query.edit_message_text(
+            "🤖 Делаю пост..."
+        )
+
+        prompt = (
+            "Ты ведёшь Telegram-канал "
+            "стримера F1cklock.\n\n"
+
+            f"Стиль:\n"
+            f"{style['prompt']}\n\n"
+
+            "Сделай из этой игровой новости "
+            "короткий интересный пост "
+            "для Telegram на русском языке.\n\n"
+
+            "ОЧЕНЬ ВАЖНО:\n"
+            "- не придумывай факты;\n"
+            "- не меняй смысл новости;\n"
+            "- не говори, что ты AI;\n"
+            "- не делай длинную статью;\n"
+            "- не используй заглушки ссылок;\n"
+            "- текст должен выглядеть как пост "
+            "живого игрового канала.\n\n"
+
+            f"Заголовок новости:\n"
+            f"{selected['title']}\n\n"
+
+            f"Источник:\n"
+            f"{selected.get('source', '')}\n\n"
+
+            f"Ссылка на источник:\n"
+            f"{selected.get('link', '')}"
+        )
+
+        try:
+
+            text = await gemini_request(
+                prompt
+            )
+
+            context.user_data[
+                "ai_text"
+            ] = text
+
+            context.user_data[
+                "ai_prompt"
+            ] = selected["title"]
+
+            context.user_data[
+                "ai_photo"
+            ] = None
+
+            context.user_data[
+                "ai_style"
+            ] = style_key
+
+            context.user_data[
+                "mode"
+            ] = "ai"
+
+            await query.edit_message_text(
+                "📰 Готовый пост:\n\n"
+                f"{text}\n\n"
+                f"🎨 {style['name']}",
+                reply_markup=ai_keyboard(),
+            )
+
+        except Exception:
+
+            logger.exception(
+                "News AI error"
+            )
+
+            await query.edit_message_text(
+                "❌ Не удалось создать пост."
+            )
+
+        return
+
+
+# =========================================================
+# СТИЛИ AI
+# =========================================================
+
+async def style_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    query = update.callback_query
+
+    if query.from_user.id != OWNER_ID:
+
+        await query.answer()
+
+        return
+
+    await query.answer()
+
+    data = query.data
+
+    # =====================================================
+    # НОВЫЙ AI-ПОСТ
+    # =====================================================
+
+    if data.startswith(
+        "style_"
+    ):
+
+        style_key = data[
+            len("style_"):
+        ]
+
+        if style_key not in STYLES:
+            return
 
         context.user_data[
             "ai_style"
@@ -1065,26 +1238,113 @@ async def create_post_from_news(
             "mode"
         ] = "ai"
 
-        await query.edit_message_text(
-            "📰 Готовый пост:\n\n"
-            f"{text}\n\n"
-            f"🎨 Стиль: {style['name']}",
-            reply_markup=ai_keyboard(),
-        )
-
-    except Exception:
-
-        logger.exception(
-            "News AI error"
-        )
+        style = STYLES[
+            style_key
+        ]
 
         await query.edit_message_text(
-            "❌ Не удалось сделать пост."
+            f"🎨 Выбран стиль: "
+            f"{style['name']}\n\n"
+            "Теперь напиши тему поста."
         )
+
+        await query.message.reply_text(
+            "🤖 Напиши тему поста:",
+            reply_markup=CANCEL_MENU,
+        )
+
+        return
+
+    # =====================================================
+    # СМЕНА СТИЛЯ
+    # =====================================================
+
+    if data.startswith(
+        "change_style_"
+    ):
+
+        style_key = data[
+            len("change_style_"):
+        ]
+
+        if style_key not in STYLES:
+            return
+
+        style = STYLES[
+            style_key
+        ]
+
+        old_text = context.user_data.get(
+            "ai_text",
+            "",
+        )
+
+        if not old_text:
+            return
+
+        context.user_data[
+            "ai_style"
+        ] = style_key
+
+        await query.edit_message_text(
+            "🎨 Меняю стиль..."
+        )
+
+        try:
+
+            prompt = (
+                "Переделай этот Telegram-пост "
+                "в новый стиль.\n\n"
+
+                f"Стиль:\n"
+                f"{style['prompt']}\n\n"
+
+                "Сохрани факты и смысл.\n"
+                "Не придумывай детали.\n"
+                "Дай только готовый пост.\n\n"
+
+                f"Исходный пост:\n"
+                f"{old_text}"
+            )
+
+            text = await gemini_request(
+                prompt
+            )
+
+            context.user_data[
+                "ai_text"
+            ] = text
+
+            photo_id = context.user_data.get(
+                "ai_photo"
+            )
+
+            keyboard = (
+                ai_photo_keyboard()
+                if photo_id
+                else ai_keyboard()
+            )
+
+            await query.edit_message_text(
+                "🤖 Новый стиль:\n\n"
+                f"{text}\n\n"
+                f"🎨 {style['name']}",
+                reply_markup=keyboard,
+            )
+
+        except Exception:
+
+            logger.exception(
+                "Style change error"
+            )
+
+            await query.edit_message_text(
+                "❌ Не удалось сменить стиль."
+            )
 
 
 # =========================================================
-# AI КНОПКИ
+# AI CALLBACK
 # =========================================================
 
 async def ai_buttons(
@@ -1102,9 +1362,9 @@ async def ai_buttons(
 
     await query.answer()
 
-    # -----------------------------------------
+    # =====================================================
     # ДОБАВИТЬ ФОТО
-    # -----------------------------------------
+    # =====================================================
 
     if query.data == "ai_add_photo":
 
@@ -1120,9 +1380,9 @@ async def ai_buttons(
 
         return
 
-    # -----------------------------------------
+    # =====================================================
     # СМЕНИТЬ СТИЛЬ
-    # -----------------------------------------
+    # =====================================================
 
     if query.data == "ai_change_style":
 
@@ -1139,9 +1399,9 @@ async def ai_buttons(
 
         return
 
-    # -----------------------------------------
+    # =====================================================
     # ИЗМЕНИТЬ
-    # -----------------------------------------
+    # =====================================================
 
     if query.data == "ai_edit":
 
@@ -1160,9 +1420,9 @@ async def ai_buttons(
 
         return
 
-    # -----------------------------------------
+    # =====================================================
     # ОТМЕНА
-    # -----------------------------------------
+    # =====================================================
 
     if query.data == "ai_cancel":
 
@@ -1179,9 +1439,9 @@ async def ai_buttons(
 
         return
 
-    # -----------------------------------------
-    # ОПУБЛИКОВАТЬ
-    # -----------------------------------------
+    # =====================================================
+    # ПУБЛИКАЦИЯ
+    # =====================================================
 
     if query.data == "ai_publish":
 
@@ -1254,15 +1514,14 @@ async def ai_buttons(
             )
 
             await query.edit_message_text(
-                "❌ Не удалось опубликовать пост.\n\n"
-                "Проверь права бота в канале."
+                "❌ Не удалось опубликовать пост."
             )
 
         return
 
-    # -----------------------------------------
+    # =====================================================
     # ПЕРЕДЕЛАТЬ
-    # -----------------------------------------
+    # =====================================================
 
     if query.data == "ai_retry":
 
@@ -1298,155 +1557,16 @@ async def ai_buttons(
                 "Создай другой вариант "
                 "Telegram-поста на русском языке.\n\n"
 
-                f"Стиль:\n{style['prompt']}\n\n"
-
-                "Пост должен быть живым, коротким "
-                "и естественным.\n"
-
-                "Не придумывай факты.\n"
-                "Не используй заглушки ссылок.\n\n"
-
-                f"Тема:\n{prompt}"
-            )
-
-            text = await gemini_request(
-                ai_prompt
-            )
-
-            context.user_data[
-                "ai_text"
-            ] = text
-
-            await query.edit_message_text(
-                "🤖 Новый вариант:\n\n"
-                f"{text}\n\n"
-                f"🎨 Стиль: {style['name']}",
-                reply_markup=ai_keyboard(),
-            )
-
-        except Exception:
-
-            logger.exception(
-                "AI retry error"
-            )
-
-            await query.edit_message_text(
-                "❌ Gemini снова не ответил.\n"
-                "Попробуй ещё раз."
-            )
-
-        return
-
-
-# =========================================================
-# ОБРАБОТКА CALLBACK СТИЛЕЙ
-# =========================================================
-
-async def style_callback(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    query = update.callback_query
-
-    if query.from_user.id != OWNER_ID:
-
-        await query.answer()
-
-        return
-
-    await query.answer()
-
-    data = query.data
-
-    # -----------------------------------------
-    # НОВЫЙ AI-ПОСТ
-    # -----------------------------------------
-
-    if data.startswith(
-        "style_"
-    ):
-
-        style_key = data[
-            len("style_"):
-        ]
-
-        if style_key not in STYLES:
-            return
-
-        context.user_data[
-            "ai_style"
-        ] = style_key
-
-        context.user_data[
-            "mode"
-        ] = "ai"
-
-        style = STYLES[
-            style_key
-        ]
-
-        await query.edit_message_text(
-            f"🎨 Выбран стиль: {style['name']}\n\n"
-            "Теперь напиши тему поста."
-        )
-
-        await query.message.reply_text(
-            "🤖 Напиши тему поста:",
-            reply_markup=CANCEL_MENU,
-        )
-
-        return
-
-    # -----------------------------------------
-    # СМЕНА СТИЛЯ
-    # -----------------------------------------
-
-    if data.startswith(
-        "change_style_"
-    ):
-
-        style_key = data[
-            len("change_style_"):
-        ]
-
-        if style_key not in STYLES:
-            return
-
-        context.user_data[
-            "ai_style"
-        ] = style_key
-
-        prompt = context.user_data.get(
-            "ai_prompt"
-        )
-
-        if not prompt:
-            return
-
-        style = STYLES[
-            style_key
-        ]
-
-        await query.edit_message_text(
-            "🎨 Меняю стиль..."
-        )
-
-        try:
-
-            ai_prompt = (
-                "Переделай этот Telegram-пост "
-                "в новый стиль.\n\n"
-
-                f"Новый стиль:\n"
+                f"Стиль:\n"
                 f"{style['prompt']}\n\n"
 
-                "Сохрани факты и смысл.\n"
-                "Не добавляй выдуманные факты.\n"
-                "Дай только готовый текст поста.\n\n"
+                "Пост должен быть живым, "
+                "коротким и естественным.\n"
 
-                f"Исходный пост:\n"
-                f"{context.user_data.get('ai_text', '')}"
+                "Не придумывай факты.\n"
+                "Дай только готовый пост.\n\n"
+
+                f"Тема:\n{prompt}"
             )
 
             text = await gemini_request(
@@ -1468,221 +1588,22 @@ async def style_callback(
             )
 
             await query.edit_message_text(
-                "🤖 Новый стиль:\n\n"
-                f"{text}\n\n"
-                f"🎨 {style['name']}",
+                "🤖 Новый вариант:\n\n"
+                f"{text}",
                 reply_markup=keyboard,
             )
 
         except Exception:
 
             logger.exception(
-                "Style change error"
+                "AI retry error"
             )
 
             await query.edit_message_text(
-                "❌ Не удалось сменить стиль."
-            )
-
-
-# =========================================================
-# НОВОСТНЫЕ CALLBACK
-# =========================================================
-
-async def news_callback(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-):
-
-    query = update.callback_query
-
-    if query.from_user.id != OWNER_ID:
-
-        await query.answer()
-
-        return
-
-    await query.answer()
-
-    data = query.data
-
-    # -----------------------------------------
-    # ВЫБОР ИГРЫ
-    # -----------------------------------------
-
-    if data.startswith(
-        "news_game_"
-    ):
-
-        game_key = data[
-            len("news_game_"):
-        ]
-
-        game_name = NEWS_GAMES.get(
-            game_key
-        )
-
-        if not game_name:
-            return
-
-        context.user_data[
-            "news_game"
-        ] = game_name
-
-        await search_news(
-            game_name,
-            context,
-            query.message,
-        )
-
-        return
-
-    # -----------------------------------------
-    # ИСКАТЬ СНОВА
-    # -----------------------------------------
-
-    if data == "news_search_again":
-
-        game_name = context.user_data.get(
-            "news_game"
-        )
-
-        if game_name:
-
-            await search_news(
-                game_name,
-                context,
-                query.message,
+                "❌ Gemini снова не ответил."
             )
 
         return
-
-    # -----------------------------------------
-    # ВЫБОР НОВОСТИ
-    # -----------------------------------------
-
-    if data == "news_select":
-
-        news_text = context.user_data.get(
-            "news_result"
-        )
-
-        if not news_text:
-            return
-
-        context.user_data[
-            "mode"
-        ] = "news_choose_style"
-
-        context.user_data[
-            "selected_news"
-        ] = news_text
-
-        await query.message.reply_text(
-            "🎨 Выбери стиль для новости:",
-            reply_markup=styles_keyboard(
-                prefix="news_style"
-            ),
-        )
-
-        return
-
-    # -----------------------------------------
-    # СТИЛЬ НОВОСТИ
-    # -----------------------------------------
-
-    if data.startswith(
-        "news_style_"
-    ):
-
-        style_key = data[
-            len("news_style_"):
-        ]
-
-        if style_key not in STYLES:
-            return
-
-        context.user_data[
-            "news_style"
-        ] = style_key
-
-        news_text = context.user_data.get(
-            "selected_news"
-        )
-
-        if not news_text:
-            return
-
-        style = STYLES[
-            style_key
-        ]
-
-        await query.edit_message_text(
-            "🤖 Делаю пост..."
-        )
-
-        prompt = (
-            "Ты ведёшь Telegram-канал "
-            "стримера F1cklock.\n\n"
-
-            f"Стиль:\n{style['prompt']}\n\n"
-
-            "На основе найденных новостей "
-            "создай короткий готовый пост "
-            "для Telegram.\n\n"
-
-            "Выбери наиболее интересный факт "
-            "из представленного материала.\n"
-
-            "Не придумывай факты.\n"
-            "Не говори, что ты AI.\n"
-            "Не делай длинную статью.\n\n"
-
-            f"Новости:\n{news_text}"
-        )
-
-        try:
-
-            text = await gemini_request(
-                prompt
-            )
-
-            context.user_data[
-                "ai_text"
-            ] = text
-
-            context.user_data[
-                "ai_prompt"
-            ] = news_text
-
-            context.user_data[
-                "ai_photo"
-            ] = None
-
-            context.user_data[
-                "ai_style"
-            ] = style_key
-
-            context.user_data[
-                "mode"
-            ] = "ai"
-
-            await query.edit_message_text(
-                "📰 Готовый пост:\n\n"
-                f"{text}\n\n"
-                f"🎨 {style['name']}",
-                reply_markup=ai_keyboard(),
-            )
-
-        except Exception:
-
-            logger.exception(
-                "News style AI error"
-            )
-
-            await query.edit_message_text(
-                "❌ Не удалось создать пост."
-            )
 
 
 # =========================================================
@@ -1697,7 +1618,9 @@ async def global_cancel(
     query = update.callback_query
 
     if query.from_user.id != OWNER_ID:
+
         await query.answer()
+
         return
 
     await query.answer()
@@ -1711,6 +1634,221 @@ async def global_cancel(
     await query.message.reply_text(
         "Главное меню:",
         reply_markup=MAIN_MENU,
+    )
+
+
+# =========================================================
+# /START
+# =========================================================
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    if not is_owner(update):
+        return
+
+    context.user_data.clear()
+
+    await update.message.reply_text(
+        "👋 Привет!\n\n"
+        "Я готов публиковать посты в канал.",
+        reply_markup=MAIN_MENU,
+    )
+
+
+# =========================================================
+# ОБЫЧНЫЙ ПОСТ
+# =========================================================
+
+async def create_post(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    context.user_data[
+        "mode"
+    ] = "post"
+
+    await update.message.reply_text(
+        "🎮 Пришли текст, фото, видео или файл "
+        "для публикации.",
+        reply_markup=CANCEL_MENU,
+    )
+
+
+# =========================================================
+# АНОНС
+# =========================================================
+
+async def stream_announce(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    context.user_data[
+        "mode"
+    ] = "announce"
+
+    context.user_data[
+        "step"
+    ] = "game"
+
+    await update.message.reply_text(
+        "🔴 Напиши название игры/стрима.",
+        reply_markup=CANCEL_MENU,
+    )
+
+
+# =========================================================
+# Я В ЭФИРЕ
+# =========================================================
+
+async def live_stream(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    context.user_data[
+        "mode"
+    ] = "live"
+
+    context.user_data[
+        "step"
+    ] = "game"
+
+    await update.message.reply_text(
+        "📡 Напиши название игры/стрима.",
+        reply_markup=CANCEL_MENU,
+    )
+
+
+# =========================================================
+# КЛИП
+# =========================================================
+
+async def create_clip(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    context.user_data[
+        "mode"
+    ] = "clip"
+
+    await update.message.reply_text(
+        "🎬 Пришли клип или видео.",
+        reply_markup=CANCEL_MENU,
+    )
+
+
+# =========================================================
+# РАСПИСАНИЕ
+# =========================================================
+
+async def schedule_menu(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    await update.message.reply_text(
+        "📅 Расписание:",
+        reply_markup=SCHEDULE_MENU,
+    )
+
+
+async def add_stream(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    context.user_data[
+        "mode"
+    ] = "schedule"
+
+    context.user_data[
+        "step"
+    ] = "date"
+
+    await update.message.reply_text(
+        "📅 Напиши дату и время стрима.\n\n"
+        "Например:\n"
+        "05.09 20:00",
+        reply_markup=CANCEL_MENU,
+    )
+
+
+async def show_schedule(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    schedule = context.bot_data.get(
+        "schedule",
+        [],
+    )
+
+    if not schedule:
+
+        await update.message.reply_text(
+            "📋 Расписание пока пустое.",
+            reply_markup=SCHEDULE_MENU,
+        )
+
+        return
+
+    text = "📋 Расписание:\n\n"
+
+    for item in schedule:
+
+        text += (
+            f"🔴 {item['date']} — "
+            f"{item['game']}\n"
+        )
+
+    await update.message.reply_text(
+        text,
+        reply_markup=SCHEDULE_MENU,
+    )
+
+
+# =========================================================
+# НАСТРОЙКИ
+# =========================================================
+
+async def settings(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    await update.message.reply_text(
+        "⚙️ Настройки\n\n"
+        "Бот работает в режиме публикации "
+        "в канал.\n\n"
+        f"Канал: {CHANNEL}",
+        reply_markup=MAIN_MENU,
+    )
+
+
+# =========================================================
+# ПУБЛИКАЦИЯ МЕДИА
+# =========================================================
+
+async def publish_media(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+
+    message = update.message
+
+    if not message:
+        return
+
+    await context.bot.copy_message(
+        chat_id=CHANNEL,
+        from_chat_id=message.chat_id,
+        message_id=message.message_id,
     )
 
 
@@ -1749,7 +1887,7 @@ async def handle_message(
         return
 
     # =====================================================
-    # ДОБАВЛЕНИЕ ФОТО К AI
+    # ФОТО К AI
     # =====================================================
 
     if (
@@ -1771,17 +1909,13 @@ async def handle_message(
                 "mode"
             ] = "ai"
 
-            ai_text = context.user_data.get(
-                "ai_text",
-                "",
-            )
-
             ai_text = fix_twitch_link(
-                ai_text
+                context.user_data.get(
+                    "ai_text",
+                    "",
+                )
             )
 
-            # Telegram ограничивает caption
-            # у фото 1024 символами.
             if len(ai_text) <= 950:
 
                 await message.reply_photo(
@@ -1824,9 +1958,11 @@ async def handle_message(
     ):
 
         if not message.text:
+
             await message.reply_text(
                 "✏️ Напиши текстом, что изменить."
             )
+
             return
 
         instruction = message.text
@@ -1855,7 +1991,8 @@ async def handle_message(
             prompt = (
                 "Отредактируй Telegram-пост.\n\n"
 
-                f"Стиль:\n{style['prompt']}\n\n"
+                f"Стиль:\n"
+                f"{style['prompt']}\n\n"
 
                 f"Что нужно изменить:\n"
                 f"{instruction}\n\n"
@@ -2014,7 +2151,7 @@ async def handle_message(
         return
 
     # =====================================================
-    # AI — ОЖИДАЕМ ТЕМУ
+    # AI
     # =====================================================
 
     if (
@@ -2168,7 +2305,7 @@ async def handle_message(
 
 
 # =========================================================
-# АВТООБЪЯВЛЕНИЕ РАСПИСАНИЯ
+# РАСПИСАНИЕ
 # =========================================================
 
 async def schedule_checker(
@@ -2285,7 +2422,7 @@ def main():
         )
     )
 
-    # Проверка расписания
+    # Расписание
     application.job_queue.run_repeating(
         schedule_checker,
         interval=60,
