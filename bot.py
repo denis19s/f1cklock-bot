@@ -133,14 +133,13 @@ STYLES = {
 # =========================================================
 
 NEWS_GAMES = {
-    "cs2": "Counter-Strike 2",
-    "gta": "GTA",
-    "pubg": "PUBG",
     "fortnite": "Fortnite",
-    "minecraft": "Minecraft",
-    "dota2": "Dota 2",
-    "valorant": "Valorant",
-    "other": "Игры",
+    "hearthstone": "Hearthstone",
+    "apex": "Apex Legends",
+    "cs2": "Counter-Strike 2",
+    "arc_raiders": "ARC Raiders",
+    "gta5": "GTA 5",
+    "pubg": "PUBG",
 }
 
 
@@ -716,8 +715,8 @@ async def news_start(
     )
 
     await update.message.reply_text(
-        "📰 Новости игр\n\n"
-        "Выбери игру:",
+        "📰 Game News\n\n"
+        "Choose a game:",
         reply_markup=InlineKeyboardMarkup(
             keyboard
         ),
@@ -850,7 +849,7 @@ async def show_game_news(
 ):
 
     await query.edit_message_text(
-        "📰 Ищу свежие новости..."
+        "📰 Searching for fresh news..."
     )
 
     try:
@@ -862,8 +861,8 @@ async def show_game_news(
         if not news:
 
             await query.edit_message_text(
-                "📰 Свежих новостей не найдено.\n\n"
-                "Попробуй другую игру."
+                "📰 No fresh news found.\n\n"
+                "Try another game."
             )
 
             return
@@ -901,7 +900,7 @@ async def show_game_news(
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    "🔄 Обновить",
+                    "🔄 Refresh",
                     callback_data="news_refresh",
                 )
             ]
@@ -910,15 +909,15 @@ async def show_game_news(
         keyboard.append(
             [
                 InlineKeyboardButton(
-                    "❌ Закрыть",
+                    "❌ Close",
                     callback_data="global_cancel",
                 )
             ]
         )
 
         text = (
-            f"📰 Новости: {game_name}\n\n"
-            "Выбери новость:"
+            f"📰 News: {game_name}\n\n"
+            "Choose a news item:"
         )
 
         await query.edit_message_text(
@@ -928,16 +927,15 @@ async def show_game_news(
             ),
         )
 
-    except Exception as e:
+    except Exception:
 
         logger.exception(
             "News RSS error"
         )
 
         await query.edit_message_text(
-            "❌ Не удалось получить новости.\n\n"
-            "Ошибка поиска новостей.\n"
-            "Попробуй ещё раз."
+            "❌ Failed to get news.\n\n"
+            "Try again."
         )
 
 
@@ -1040,7 +1038,7 @@ async def news_callback(
         ):
 
             await query.message.reply_text(
-                "❌ Новость больше недоступна."
+                "❌ News is no longer available."
             )
 
             return
@@ -1058,7 +1056,7 @@ async def news_callback(
         ] = "news_choose_style"
 
         text = (
-            "📰 Выбрана новость:\n\n"
+            "📰 Selected news:\n\n"
             f"{selected['title']}\n\n"
         )
 
@@ -1067,12 +1065,12 @@ async def news_callback(
         ):
 
             text += (
-                f"Источник: "
+                f"Source: "
                 f"{selected['source']}\n\n"
             )
 
         text += (
-            "🎨 Теперь выбери стиль:"
+            "🎨 Now choose a style:"
         )
 
         await query.message.reply_text(
@@ -1115,7 +1113,7 @@ async def news_callback(
         ]
 
         await query.edit_message_text(
-            "🤖 Делаю пост..."
+            "🤖 Creating post..."
         )
 
         prompt = (
@@ -1175,7 +1173,7 @@ async def news_callback(
             ] = "ai"
 
             await query.edit_message_text(
-                "📰 Готовый пост:\n\n"
+                "📰 Ready post:\n\n"
                 f"{text}\n\n"
                 f"🎨 {style['name']}",
                 reply_markup=ai_keyboard(),
@@ -1188,7 +1186,7 @@ async def news_callback(
             )
 
             await query.edit_message_text(
-                "❌ Не удалось создать пост."
+                "❌ Failed to create the post."
             )
 
         return
@@ -1628,11 +1626,11 @@ async def global_cancel(
     context.user_data.clear()
 
     await query.edit_message_text(
-        "❌ Отменено."
+        "❌ Cancelled."
     )
 
     await query.message.reply_text(
-        "Главное меню:",
+        "Main menu:",
         reply_markup=MAIN_MENU,
     )
 
