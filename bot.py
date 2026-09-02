@@ -1,16 +1,30 @@
 import os
 import logging
+import json
 
-from telegram import Update, ReplyKeyboardMarkup
+from google import genai
+
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
     MessageHandler,
+    CallbackQueryHandler,
     ContextTypes,
     filters,
 )
 
+# =========================
+# НАСТРОЙКИ
+# =========================
+
 BOT_TOKEN = os.environ["BOT_TOKEN"]
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
 OWNER_ID = 610625282
 CHANNEL = "@F1cklock"
@@ -18,44 +32,73 @@ CHANNEL = "@F1cklock"
 PORT = int(os.environ.get("PORT", "10000"))
 WEBHOOK_URL = os.environ["WEBHOOK_URL"]
 
+AI_MODEL = "gemini-3.7-flash"
+
+ai = genai.Client(api_key=GEMINI_API_KEY)
+
+# Расписание хранится в памяти процесса.
+schedule = []
+
 
 # =========================
-# КЛАВИАТУРА
+# КЛАВИАТУРЫ
 # =========================
 
 MENU = ReplyKeyboardMarkup(
     [
         ["🎮 Создать пост", "🔴 Анонс стрима"],
         ["📡 Я в эфире", "📅 Расписание"],
-        ["🎬 Клип"],
+        ["🎬 Клип", "🤖 Создать с ИИ"],
+        ["⚙️ Настройки"],
     ],
     resize_keyboard=True,
 )
 
-
 CANCEL = ReplyKeyboardMarkup(
+    [["❌ Отмена"]],
+    resize_keyboard=True,
+)
+
+SCHEDULE_MENU = ReplyKeyboardMarkup(
     [
-        ["❌ Отмена"],
+        ["➕ Добавить стрим"],
+        ["📋 Показать расписание"],
+        ["✏️ Изменить", "🗑 Удалить"],
+        ["⬅️ Главное меню"],
     ],
     resize_keyboard=True,
 )
 
 
 # =========================
-# МЕНЮ
+# START
 # =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+    if not update.effective_user:
+        return
 
-    if not user or user.id != OWNER_ID:
+    if update.effective_user.id != OWNER_ID:
         return
 
     context.user_data.clear()
 
     await update.message.reply_text(
         "👋 Привет!\n\n"
-        "Выбери, что хочешь сделать:",
+        "Панель управления F1cklock:",
+        reply_markup=MENU,
+    )
+
+
+# =========================
+# ОТМЕНА
+# =========================
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+
+    await update.message.reply_text(
+        "❌ Отменено.",
         reply_markup=MENU,
     )
 
@@ -65,20 +108,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 
 async def create_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     context.user_data["mode"] = "post"
 
     await update.message.reply_text(
         "📝 Отправь текст, фото, видео или файл.\n\n"
-        "Я сразу опубликую это в канал.",
+        "Я опубликую его в канал.",
         reply_markup=CANCEL,
     )
 
 
 # =========================
-# АНОНС СТРИМА
+# АНОНС
 # =========================
 
-async def stream_announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     context.user_data["mode"] = "announce"
     context.user_data["step"] = "game"
 
@@ -92,7 +137,8 @@ async def stream_announce(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Я В ЭФИРЕ
 # =========================
 
-async def live_stream(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     context.user_data["mode"] = "live"
     context.user_data["step"] = "game"
 
@@ -107,12 +153,11 @@ async def live_stream(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 
 async def clip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
     context.user_data["mode"] = "clip"
-    context.user_data["step"] = "content"
 
     await update.message.reply_text(
-        "🎬 Отправь клип.\n\n"
-        "Я опубликую его в канал.",
+        "🎬 Отправь клип.",
         reply_markup=CANCEL,
     )
 
@@ -121,122 +166,279 @@ async def clip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # РАСПИСАНИЕ
 # =========================
 
-async def schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📅 Расписание\n\n"
-        "Функция расписания пока в разработке.",
-        reply_markup=MENU,
-    )
-
-
-# =========================
-# ОТМЕНА
-# =========================
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def schedule_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
 
     await update.message.reply_text(
-        "❌ Отменено.\n\n"
-        "Выбери действие:",
-        reply_markup=MENU,
+        "📅 Расписание стримов:",
+        reply_markup=SCHEDULE_MENU,
     )
 
 
-# =========================
-# ОБРАБОТКА ИГРЫ
-# =========================
-
-async def handle_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    game = update.message.text
-
-    context.user_data["game"] = game
-    context.user_data["step"] = "content"
-
-    mode = context.user_data.get("mode")
-
-    if mode == "announce":
-        text = (
-            f"🔴 АНОНС СТРИМА\n\n"
-            f"🎮 Игра: {game}\n\n"
-            f"📝 Теперь отправь текст, фото или видео для анонса."
-        )
-
-    else:
-        text = (
-            f"📡 Я В ЭФИРЕ\n\n"
-            f"🎮 Игра: {game}\n\n"
-            f"📝 Теперь отправь текст, фото или видео."
-        )
+async def add_stream(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    context.user_data["mode"] = "add_stream"
+    context.user_data["step"] = "game"
 
     await update.message.reply_text(
-        text,
+        "🎮 Какая игра?",
         reply_markup=CANCEL,
     )
 
 
+async def show_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not schedule:
+        await update.message.reply_text(
+            "📅 Расписание пока пустое.",
+            reply_markup=SCHEDULE_MENU,
+        )
+        return
+
+    text = "📅 РАСПИСАНИЕ\n\n"
+
+    for i, item in enumerate(schedule, 1):
+        text += (
+            f"{i}. 🎮 {item['game']}\n"
+            f"📅 {item['day']}\n"
+            f"⏰ {item['time']}\n\n"
+        )
+
+    await update.message.reply_text(
+        text,
+        reply_markup=SCHEDULE_MENU,
+    )
+
+
 # =========================
-# ПУБЛИКАЦИЯ
+# ДОБАВЛЕНИЕ СТРИМА
 # =========================
 
-async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    mode = context.user_data.get("mode")
-    game = context.user_data.get("game")
+async def handle_schedule_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["game"] = update.message.text
+    context.user_data["step"] = "day"
+
+    await update.message.reply_text(
+        "📅 В какой день стрим?",
+        reply_markup=CANCEL,
+    )
+
+
+async def handle_schedule_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["day"] = update.message.text
+    context.user_data["step"] = "time"
+
+    await update.message.reply_text(
+        "⏰ Во сколько?",
+        reply_markup=CANCEL,
+    )
+
+
+async def handle_schedule_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    game = context.user_data["game"]
+    day = context.user_data["day"]
+    time = update.message.text
+
+    schedule.append(
+        {
+            "game": game,
+            "day": day,
+            "time": time,
+        }
+    )
+
+    await update.message.reply_text(
+        f"✅ Стрим добавлен!\n\n"
+        f"🎮 {game}\n"
+        f"📅 {day}\n"
+        f"⏰ {time}",
+        reply_markup=SCHEDULE_MENU,
+    )
+
+    # Автоматический анонс в канал
+    try:
+        await context.bot.send_message(
+            chat_id=CHANNEL,
+            text=(
+                "🔴 СКОРО СТРИМ!\n\n"
+                f"🎮 {game}\n"
+                f"📅 {day}\n"
+                f"⏰ {time}\n\n"
+                "🔥 Залетаем!"
+            ),
+        )
+    except Exception:
+        logging.exception("Schedule announcement error")
+
+    context.user_data.clear()
+
+
+# =========================
+# ИИ
+# =========================
+
+async def ai_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data.clear()
+    context.user_data["mode"] = "ai"
+
+    await update.message.reply_text(
+        "🤖 Что нужно создать?\n\n"
+        "Напиши обычным текстом.\n\n"
+        "Например:\n"
+        "«Сделай дерзкий анонс CS2 сегодня в 20:00»",
+        reply_markup=CANCEL,
+    )
+
+
+async def generate_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    prompt = update.message.text
+
+    await update.message.reply_text(
+        "🤖 Генерирую...",
+        reply_markup=CANCEL,
+    )
 
     try:
+        response = ai.models.generate_content(
+            model=AI_MODEL,
+            contents=(
+                "Ты SMM-помощник Telegram-канала F1cklock.\n"
+                "Пиши короткие, живые, энергичные посты для игрового "
+                "канала и стримов.\n"
+                "Не используй длинные вступления.\n"
+                "Используй эмодзи умеренно.\n\n"
+                f"Задача пользователя:\n{prompt}"
+            ),
+        )
 
-        # Обычный пост
-        if mode == "post":
-            await context.bot.copy_message(
-                chat_id=CHANNEL,
-                from_chat_id=update.message.chat_id,
-                message_id=update.message.message_id,
+        text = response.text.strip()
+
+        context.user_data["ai_text"] = text
+
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "✅ Опубликовать",
+                        callback_data="ai_publish",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "🔄 Переделать",
+                        callback_data="ai_retry",
+                    ),
+                    InlineKeyboardButton(
+                        "❌ Отмена",
+                        callback_data="ai_cancel",
+                    ),
+                ],
+            ]
+        )
+
+        await update.message.reply_text(
+            "🤖 Готово:\n\n" + text,
+            reply_markup=keyboard,
+        )
+
+    except Exception:
+        logging.exception("Gemini error")
+
+        await update.message.reply_text(
+            "❌ Не удалось обратиться к Gemini.\n"
+            "Проверь GEMINI_API_KEY в Render.",
+            reply_markup=MENU,
+        )
+
+        context.user_data.clear()
+
+
+async def ai_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.from_user.id != OWNER_ID:
+        return
+
+    action = query.data
+
+    if action == "ai_cancel":
+        context.user_data.clear()
+
+        await query.edit_message_text(
+            "❌ Отменено."
+        )
+
+        await query.message.reply_text(
+            "Главное меню:",
+            reply_markup=MENU,
+        )
+
+    elif action == "ai_publish":
+        text = context.user_data.get("ai_text")
+
+        if not text:
+            await query.edit_message_text(
+                "❌ Текст не найден."
             )
-
-        # Клип
-        elif mode == "clip":
-            await context.bot.copy_message(
-                chat_id=CHANNEL,
-                from_chat_id=update.message.chat_id,
-                message_id=update.message.message_id,
-            )
-
-        # Анонс стрима
-        elif mode == "announce":
-
-            await context.bot.send_message(
-                chat_id=CHANNEL,
-                text=(
-                    f"🔴 АНОНС СТРИМА\n\n"
-                    f"🎮 {game}"
-                ),
-            )
-
-            await context.bot.copy_message(
-                chat_id=CHANNEL,
-                from_chat_id=update.message.chat_id,
-                message_id=update.message.message_id,
-            )
-
-        # Я в эфире
-        elif mode == "live":
-
-            await context.bot.send_message(
-                chat_id=CHANNEL,
-                text=(
-                    f"📡 Я В ЭФИРЕ\n\n"
-                    f"🎮 {game}"
-                ),
-            )
-
-            await context.bot.copy_message(
-                chat_id=CHANNEL,
-                from_chat_id=update.message.chat_id,
-                message_id=update.message.message_id,
-            )
-
-        else:
             return
+
+        try:
+            await context.bot.send_message(
+                chat_id=CHANNEL,
+                text=text,
+            )
+
+            await query.edit_message_text(
+                "✅ Опубликовано в канал!"
+            )
+
+            context.user_data.clear()
+
+            await query.message.reply_text(
+                "Главное меню:",
+                reply_markup=MENU,
+            )
+
+        except Exception:
+            logging.exception("AI publication error")
+
+            await query.edit_message_text(
+                "❌ Не удалось опубликовать."
+            )
+
+    elif action == "ai_retry":
+        await query.edit_message_text(
+            "🔄 Напиши ещё раз, каким должен быть новый вариант."
+        )
+
+        context.user_data["mode"] = "ai"
+
+
+# =========================
+# НАСТРОЙКИ
+# =========================
+
+async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "⚙️ Настройки\n\n"
+        "Пока доступны настройки по умолчанию.\n\n"
+        "В следующих версиях сюда можно добавить "
+        "Twitch, YouTube, Telegram и стиль публикаций.",
+        reply_markup=MENU,
+    )
+
+
+# =========================
+# ПУБЛИКАЦИЯ МЕДИА
+# =========================
+
+async def publish_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        await context.bot.copy_message(
+            chat_id=CHANNEL,
+            from_chat_id=update.message.chat_id,
+            message_id=update.message.message_id,
+        )
 
         await update.message.reply_text(
             "✅ Опубликовано в канал!",
@@ -249,13 +451,13 @@ async def publish(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.exception("Publication error")
 
         await update.message.reply_text(
-            "❌ Не удалось опубликовать. Проверь права бота в канале.",
+            "❌ Ошибка публикации.",
             reply_markup=MENU,
         )
 
 
 # =========================
-# ОСНОВНОЙ ОБРАБОТЧИК
+# ОБРАБОТКА СООБЩЕНИЙ
 # =========================
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -272,54 +474,115 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = message.text
 
-    # Кнопки меню
+    # Главное меню
     if text == "🎮 Создать пост":
         await create_post(update, context)
         return
 
     if text == "🔴 Анонс стрима":
-        await stream_announce(update, context)
+        await announce(update, context)
         return
 
     if text == "📡 Я в эфире":
-        await live_stream(update, context)
+        await live(update, context)
         return
 
     if text == "📅 Расписание":
-        await schedule(update, context)
+        await schedule_menu(update, context)
         return
 
     if text == "🎬 Клип":
         await clip(update, context)
         return
 
+    if text == "🤖 Создать с ИИ":
+        await ai_menu(update, context)
+        return
+
+    if text == "⚙️ Настройки":
+        await settings(update, context)
+        return
+
     if text == "❌ Отмена":
         await cancel(update, context)
         return
 
+    if text == "➕ Добавить стрим":
+        await add_stream(update, context)
+        return
+
+    if text == "📋 Показать расписание":
+        await show_schedule(update, context)
+        return
+
+    if text == "⬅️ Главное меню":
+        context.user_data.clear()
+
+        await update.message.reply_text(
+            "Главное меню:",
+            reply_markup=MENU,
+        )
+        return
+
+    # -------------------------
+    # ИИ
+    # -------------------------
+
+    if context.user_data.get("mode") == "ai":
+        if message.text:
+            await generate_ai(update, context)
+        return
+
+    # -------------------------
+    # Расписание
+    # -------------------------
+
+    if context.user_data.get("mode") == "add_stream":
+
+        step = context.user_data.get("step")
+
+        if step == "game":
+            await handle_schedule_game(update, context)
+            return
+
+        if step == "day":
+            await handle_schedule_day(update, context)
+            return
+
+        if step == "time":
+            await handle_schedule_time(update, context)
+            return
+
+    # -------------------------
+    # Игровые режимы
+    # -------------------------
+
     mode = context.user_data.get("mode")
     step = context.user_data.get("step")
 
-    # Если бот ждёт название игры
     if step == "game":
         if not message.text:
-            await message.reply_text(
+            await update.message.reply_text(
                 "🎮 Напиши название игры текстом.",
                 reply_markup=CANCEL,
             )
             return
 
-        await handle_game(update, context)
+        context.user_data["game"] = message.text
+        context.user_data["step"] = "content"
+
+        await update.message.reply_text(
+            "📝 Теперь отправь текст, фото или видео.",
+            reply_markup=CANCEL,
+        )
         return
 
-    # Если бот ждёт контент
-    if step == "content":
-        await publish(update, context)
-        return
+    # -------------------------
+    # Контент
+    # -------------------------
 
-    # Если выбран обычный пост
-    if mode == "post":
-        await publish(update, context)
+    if mode in ["post", "clip", "announce", "live"]:
+        await publish_media(update, context)
         return
 
 
@@ -337,6 +600,13 @@ def main():
     app = Application.builder().token(BOT_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
+
+    app.add_handler(
+        CallbackQueryHandler(
+            ai_buttons,
+            pattern="^ai_",
+        )
+    )
 
     app.add_handler(
         MessageHandler(
