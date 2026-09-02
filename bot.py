@@ -3,6 +3,7 @@ import logging
 import asyncio
 
 from google import genai
+from google.genai import types
 
 from telegram import (
     Update,
@@ -301,10 +302,12 @@ async def ai_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-def create_gemini_interaction(prompt: str):
-    return ai.interactions.create(
+def generate_with_gemini(prompt: str):
+    logging.info("Gemini request started")
+
+    response = ai.models.generate_content(
         model=AI_MODEL,
-        input=(
+        contents=(
             "Ты SMM-помощник Telegram-канала F1cklock.\n"
             "Пиши короткие, живые и энергичные посты "
             "для игрового канала и стримов.\n"
@@ -313,36 +316,16 @@ def create_gemini_interaction(prompt: str):
             "Не добавляй пояснения от себя.\n\n"
             f"Задача пользователя:\n{prompt}"
         ),
-        generation_config={
-            "thinking_level": "low"
-        },
-        background=True,
+        config=types.GenerateContentConfig(
+            thinking_config=types.ThinkingConfig(
+                thinking_level="low"
+            )
+        ),
     )
 
+    logging.info("Gemini request completed")
 
-async def wait_for_gemini(interaction):
-    while True:
-        result = await asyncio.to_thread(
-            ai.interactions.get,
-            id=interaction.id,
-        )
-
-        logging.info(
-            "Gemini interaction %s status: %s",
-            interaction.id,
-            result.status,
-        )
-
-        if result.status == "completed":
-            return result
-
-        if result.status in ["failed", "cancelled"]:
-            raise RuntimeError(
-                f"Gemini interaction finished with status: "
-                f"{result.status}"
-            )
-
-        await asyncio.sleep(3)
+    return response.text
 
 
 async def generate_ai(
@@ -353,27 +336,20 @@ async def generate_ai(
 
     await update.message.reply_text(
         "🤖 Генерирую...\n\n"
-        "Gemini работает над постом.",
+        "Обычно это занимает несколько секунд.",
         reply_markup=CANCEL,
     )
 
     try:
-        interaction = await asyncio.to_thread(
-            create_gemini_interaction,
-            prompt,
+        text = await asyncio.wait_for(
+            asyncio.to_thread(
+                generate_with_gemini,
+                prompt,
+            ),
+            timeout=45,
         )
 
-        logging.info(
-            "Gemini background interaction started: %s",
-            interaction.id,
-        )
-
-        result = await asyncio.wait_for(
-            wait_for_gemini(interaction),
-            timeout=120,
-        )
-
-        text = (result.output_text or "").strip()
+        text = (text or "").strip()
 
         if not text:
             raise RuntimeError("Gemini вернул пустой ответ")
@@ -408,12 +384,12 @@ async def generate_ai(
         )
 
     except asyncio.TimeoutError:
-        logging.error("Gemini background timeout")
+        logging.error("Gemini timeout after 45 seconds")
 
         context.user_data.clear()
 
         await update.message.reply_text(
-            "⏱ Gemini слишком долго отвечает.\n\n"
+            "⏱ Gemini не ответил за 45 секунд.\n\n"
             "Попробуй ещё раз.",
             reply_markup=MENU,
         )
@@ -451,9 +427,7 @@ async def ai_buttons(
     if action == "ai_cancel":
         context.user_data.clear()
 
-        await query.edit_message_text(
-            "❌ Отменено."
-        )
+        await query.edit_message_text("❌ Отменено.")
 
         await query.message.reply_text(
             "Главное меню:",
@@ -513,17 +487,15 @@ async def ai_buttons(
                 f"Задача пользователя:\n{old_prompt}"
             )
 
-            interaction = await asyncio.to_thread(
-                create_gemini_interaction,
-                retry_prompt,
+            text = await asyncio.wait_for(
+                asyncio.to_thread(
+                    generate_with_gemini,
+                    retry_prompt,
+                ),
+                timeout=45,
             )
 
-            result = await asyncio.wait_for(
-                wait_for_gemini(interaction),
-                timeout=120,
-            )
-
-            text = (result.output_text or "").strip()
+            text = (text or "").strip()
 
             if not text:
                 raise RuntimeError("Gemini вернул пустой ответ")
@@ -560,7 +532,7 @@ async def ai_buttons(
             context.user_data.clear()
 
             await query.message.reply_text(
-                "⏱ Gemini слишком долго отвечает.",
+                "⏱ Gemini не ответил за 45 секунд.",
                 reply_markup=MENU,
             )
 
