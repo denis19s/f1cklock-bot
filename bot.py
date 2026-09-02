@@ -1,6 +1,5 @@
 import os
 import logging
-import json
 
 from google import genai
 
@@ -63,7 +62,6 @@ SCHEDULE_MENU = ReplyKeyboardMarkup(
     [
         ["➕ Добавить стрим"],
         ["📋 Показать расписание"],
-        ["✏️ Изменить", "🗑 Удалить"],
         ["⬅️ Главное меню"],
     ],
     resize_keyboard=True,
@@ -71,14 +69,20 @@ SCHEDULE_MENU = ReplyKeyboardMarkup(
 
 
 # =========================
+# ПРОВЕРКА ВЛАДЕЛЬЦА
+# =========================
+
+def is_owner(update: Update) -> bool:
+    user = update.effective_user
+    return bool(user and user.id == OWNER_ID)
+
+
+# =========================
 # START
 # =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.effective_user:
-        return
-
-    if update.effective_user.id != OWNER_ID:
+    if not is_owner(update):
         return
 
     context.user_data.clear()
@@ -95,6 +99,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_owner(update):
+        return
+
     context.user_data.clear()
 
     await update.message.reply_text(
@@ -213,7 +220,10 @@ async def show_schedule(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ДОБАВЛЕНИЕ СТРИМА
 # =========================
 
-async def handle_schedule_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_schedule_game(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     context.user_data["game"] = update.message.text
     context.user_data["step"] = "day"
 
@@ -223,7 +233,10 @@ async def handle_schedule_game(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 
-async def handle_schedule_day(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_schedule_day(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     context.user_data["day"] = update.message.text
     context.user_data["step"] = "time"
 
@@ -233,7 +246,10 @@ async def handle_schedule_day(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
 
 
-async def handle_schedule_time(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_schedule_time(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     game = context.user_data["game"]
     day = context.user_data["day"]
     time = update.message.text
@@ -289,30 +305,39 @@ async def ai_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def generate_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def generate_ai(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     prompt = update.message.text
 
     await update.message.reply_text(
-        "🤖 Генерирую...",
+        "🤖 Генерирую...\n\n"
+        "Обычно это занимает несколько секунд.",
         reply_markup=CANCEL,
     )
 
     try:
-        response = ai.models.generate_content(
+        response = await ai.aio.models.generate_content(
             model=AI_MODEL,
             contents=(
                 "Ты SMM-помощник Telegram-канала F1cklock.\n"
-                "Пиши короткие, живые, энергичные посты для игрового "
-                "канала и стримов.\n"
+                "Пиши короткие, живые, энергичные посты "
+                "для игрового канала и стримов.\n"
                 "Не используй длинные вступления.\n"
-                "Используй эмодзи умеренно.\n\n"
+                "Используй эмодзи умеренно.\n"
+                "Не добавляй пояснения от себя.\n\n"
                 f"Задача пользователя:\n{prompt}"
             ),
         )
 
-        text = response.text.strip()
+        text = (response.text or "").strip()
+
+        if not text:
+            raise RuntimeError("Gemini вернул пустой ответ")
 
         context.user_data["ai_text"] = text
+        context.user_data["ai_prompt"] = prompt
 
         keyboard = InlineKeyboardMarkup(
             [
@@ -344,20 +369,29 @@ async def generate_ai(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.exception("Gemini error")
 
         await update.message.reply_text(
-            "❌ Не удалось обратиться к Gemini.\n"
-            "Проверь GEMINI_API_KEY в Render.",
+            "❌ Gemini не ответил.\n\n"
+            "Проверь настройки GEMINI_API_KEY в Render.",
             reply_markup=MENU,
         )
 
         context.user_data.clear()
 
 
-async def ai_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =========================
+# КНОПКИ ИИ
+# =========================
+
+async def ai_buttons(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     query = update.callback_query
-    await query.answer()
 
     if query.from_user.id != OWNER_ID:
+        await query.answer()
         return
+
+    await query.answer()
 
     action = query.data
 
@@ -407,11 +441,74 @@ async def ai_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
     elif action == "ai_retry":
+        old_prompt = context.user_data.get("ai_prompt")
+
+        if not old_prompt:
+            await query.edit_message_text(
+                "❌ Не удалось повторить генерацию."
+            )
+            return
+
         await query.edit_message_text(
-            "🔄 Напиши ещё раз, каким должен быть новый вариант."
+            "🔄 Генерирую новый вариант..."
         )
 
-        context.user_data["mode"] = "ai"
+        try:
+            response = await ai.aio.models.generate_content(
+                model=AI_MODEL,
+                contents=(
+                    "Ты SMM-помощник Telegram-канала F1cklock.\n"
+                    "Создай НОВЫЙ вариант поста.\n"
+                    "Он должен отличаться от предыдущего.\n"
+                    "Пиши коротко, живо и энергично.\n"
+                    "Используй эмодзи умеренно.\n"
+                    "Не добавляй пояснения.\n\n"
+                    f"Задача пользователя:\n{old_prompt}"
+                ),
+            )
+
+            text = (response.text or "").strip()
+
+            if not text:
+                raise RuntimeError("Gemini вернул пустой ответ")
+
+            context.user_data["ai_text"] = text
+
+            keyboard = InlineKeyboardMarkup(
+                [
+                    [
+                        InlineKeyboardButton(
+                            "✅ Опубликовать",
+                            callback_data="ai_publish",
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            "🔄 Переделать",
+                            callback_data="ai_retry",
+                        ),
+                        InlineKeyboardButton(
+                            "❌ Отмена",
+                            callback_data="ai_cancel",
+                        ),
+                    ],
+                ]
+            )
+
+            await query.message.reply_text(
+                "🤖 Новый вариант:\n\n" + text,
+                reply_markup=keyboard,
+            )
+
+        except Exception:
+            logging.exception("Gemini retry error")
+
+            context.user_data.clear()
+
+            await query.message.reply_text(
+                "❌ Не удалось создать новый вариант.",
+                reply_markup=MENU,
+            )
 
 
 # =========================
@@ -432,7 +529,10 @@ async def settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ПУБЛИКАЦИЯ МЕДИА
 # =========================
 
-async def publish_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def publish_media(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
     try:
         await context.bot.copy_message(
             chat_id=CHANNEL,
@@ -460,11 +560,11 @@ async def publish_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ОБРАБОТКА СООБЩЕНИЙ
 # =========================
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user = update.effective_user
-
-    if not user or user.id != OWNER_ID:
+async def handle_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not is_owner(update):
         return
 
     message = update.message
@@ -538,10 +638,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # -------------------------
 
     if context.user_data.get("mode") == "add_stream":
-
         step = context.user_data.get("step")
 
         if step == "game":
+            if not message.text:
+                await update.message.reply_text(
+                    "🎮 Напиши название игры текстом.",
+                    reply_markup=CANCEL,
+                )
+                return
+
             await handle_schedule_game(update, context)
             return
 
@@ -591,7 +697,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =========================
 
 def main():
-
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(message)s",
         level=logging.INFO,
@@ -599,7 +704,9 @@ def main():
 
     app = Application.builder().token(BOT_TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(
+        CommandHandler("start", start)
+    )
 
     app.add_handler(
         CallbackQueryHandler(
