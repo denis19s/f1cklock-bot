@@ -301,18 +301,12 @@ async def ai_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-def generate_with_gemini(prompt: str):
-    """
-    Синхронный запрос к Gemini.
-    Он запускается в отдельном потоке,
-    поэтому Telegram-бот не блокируется.
-    """
-
+def create_gemini_interaction(prompt: str):
     return ai.interactions.create(
         model=AI_MODEL,
         input=(
             "Ты SMM-помощник Telegram-канала F1cklock.\n"
-            "Пиши короткие, живые, энергичные посты "
+            "Пиши короткие, живые и энергичные посты "
             "для игрового канала и стримов.\n"
             "Не используй длинные вступления.\n"
             "Используй эмодзи умеренно.\n"
@@ -322,7 +316,33 @@ def generate_with_gemini(prompt: str):
         generation_config={
             "thinking_level": "low"
         },
+        background=True,
     )
+
+
+async def wait_for_gemini(interaction):
+    while True:
+        result = await asyncio.to_thread(
+            ai.interactions.get,
+            id=interaction.id,
+        )
+
+        logging.info(
+            "Gemini interaction %s status: %s",
+            interaction.id,
+            result.status,
+        )
+
+        if result.status == "completed":
+            return result
+
+        if result.status in ["failed", "cancelled"]:
+            raise RuntimeError(
+                f"Gemini interaction finished with status: "
+                f"{result.status}"
+            )
+
+        await asyncio.sleep(3)
 
 
 async def generate_ai(
@@ -333,21 +353,27 @@ async def generate_ai(
 
     await update.message.reply_text(
         "🤖 Генерирую...\n\n"
-        "Если Gemini не ответит в течение 30 секунд, "
-        "бот сообщит об ошибке.",
+        "Gemini работает над постом.",
         reply_markup=CANCEL,
     )
 
     try:
-        interaction = await asyncio.wait_for(
-            asyncio.to_thread(
-                generate_with_gemini,
-                prompt,
-            ),
-            timeout=30,
+        interaction = await asyncio.to_thread(
+            create_gemini_interaction,
+            prompt,
         )
 
-        text = (interaction.output_text or "").strip()
+        logging.info(
+            "Gemini background interaction started: %s",
+            interaction.id,
+        )
+
+        result = await asyncio.wait_for(
+            wait_for_gemini(interaction),
+            timeout=120,
+        )
+
+        text = (result.output_text or "").strip()
 
         if not text:
             raise RuntimeError("Gemini вернул пустой ответ")
@@ -382,12 +408,12 @@ async def generate_ai(
         )
 
     except asyncio.TimeoutError:
-        logging.error("Gemini timeout after 30 seconds")
+        logging.error("Gemini background timeout")
 
         context.user_data.clear()
 
         await update.message.reply_text(
-            "⏱ Gemini не ответил за 30 секунд.\n\n"
+            "⏱ Gemini слишком долго отвечает.\n\n"
             "Попробуй ещё раз.",
             reply_markup=MENU,
         )
@@ -487,15 +513,17 @@ async def ai_buttons(
                 f"Задача пользователя:\n{old_prompt}"
             )
 
-            interaction = await asyncio.wait_for(
-                asyncio.to_thread(
-                    generate_with_gemini,
-                    retry_prompt,
-                ),
-                timeout=30,
+            interaction = await asyncio.to_thread(
+                create_gemini_interaction,
+                retry_prompt,
             )
 
-            text = (interaction.output_text or "").strip()
+            result = await asyncio.wait_for(
+                wait_for_gemini(interaction),
+                timeout=120,
+            )
+
+            text = (result.output_text or "").strip()
 
             if not text:
                 raise RuntimeError("Gemini вернул пустой ответ")
@@ -532,7 +560,7 @@ async def ai_buttons(
             context.user_data.clear()
 
             await query.message.reply_text(
-                "⏱ Gemini не ответил за 30 секунд.",
+                "⏱ Gemini слишком долго отвечает.",
                 reply_markup=MENU,
             )
 
@@ -608,8 +636,6 @@ async def handle_message(
 
     text = message.text
 
-    # Главное меню
-
     if text == "🎮 Создать пост":
         await create_post(update, context)
         return
@@ -659,14 +685,10 @@ async def handle_message(
         )
         return
 
-    # ИИ
-
     if context.user_data.get("mode") == "ai":
         if message.text:
             await generate_ai(update, context)
         return
-
-    # Расписание
 
     if context.user_data.get("mode") == "add_stream":
 
@@ -691,8 +713,6 @@ async def handle_message(
             await handle_schedule_time(update, context)
             return
 
-    # Игровые режимы
-
     mode = context.user_data.get("mode")
     step = context.user_data.get("step")
 
@@ -713,8 +733,6 @@ async def handle_message(
             reply_markup=CANCEL,
         )
         return
-
-    # Контент
 
     if mode in ["post", "clip", "announce", "live"]:
         await publish_media(update, context)
